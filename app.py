@@ -84,6 +84,7 @@ def download_m3u8(url, filename, task_id):
     try:
         start_time = time.time()
         downloaded_bytes = 0
+        temp_output_path = None
         download_status[task_id] = {
             'status': 'downloading',
             'progress': 0,
@@ -134,182 +135,142 @@ def download_m3u8(url, filename, task_id):
         total_segments = len(playlist.segments)
         download_status[task_id]['message'] = f'找到 {total_segments} 个视频片段，开始下载...'
 
-        ts_files = []
-        failed_segments = []
         key_cache = {}
         media_sequence = getattr(playlist, 'media_sequence', 0)
+        output_path = os.path.join(DOWNLOAD_FOLDER, filename)
+        temp_output_path = output_path + '.part'
 
-        for i, segment in enumerate(playlist.segments):
-            segment_url = urljoin(base_url, segment.uri)
+        with open(temp_output_path, 'wb') as output_file:
 
-            if not is_safe_url(segment_url):
+            def abort_download(message):
                 current_status = download_status.get(task_id, {})
+                progress = current_status.get('progress', 0)
                 download_status[task_id] = {
                     'status': 'error',
-                    'message': f'片段 {i + 1} URL 指向内部网络资源，出于安全考虑已拒绝下载',
-                    'progress': download_status[task_id].get('progress', 0),
+                    'message': message,
+                    'progress': progress,
                     'speed': None,
                     'eta': None,
                     'download_url': current_status.get('download_url')
                 }
-                return
-            
-            try:
-                seg_response = requests.get(segment_url, headers=headers, timeout=30)
-                seg_response.raise_for_status()
-
-                segment_data = seg_response.content
-
-                if segment.key and segment.key.method and segment.key.method.upper() != 'NONE':
-                    method = segment.key.method.upper()
-
-                    if method != 'AES-128':
-                        current_status = download_status.get(task_id, {})
-                        download_status[task_id] = {
-                            'status': 'error',
-                            'message': f'片段 {i + 1} 使用了不支持的加密方式: {method}',
-                            'progress': download_status[task_id].get('progress', 0),
-                            'speed': None,
-                            'eta': None,
-                            'download_url': current_status.get('download_url')
-                        }
-                        return
-
-                    key_uri = segment.key.uri
-                    key_url = urljoin(base_url, key_uri)
-
-                    if not is_safe_url(key_url):
-                        current_status = download_status.get(task_id, {})
-                        download_status[task_id] = {
-                            'status': 'error',
-                            'message': f'密钥 URL 指向内部网络资源，出于安全考虑已拒绝下载',
-                            'progress': download_status[task_id].get('progress', 0),
-                            'speed': None,
-                            'eta': None,
-                            'download_url': current_status.get('download_url')
-                        }
-                        return
-
-                    key_bytes = key_cache.get(key_url)
-                    if key_bytes is None:
-                        try:
-                            key_response = requests.get(key_url, headers=headers, timeout=30)
-                            key_response.raise_for_status()
-                            key_bytes = key_response.content
-                            key_cache[key_url] = key_bytes
-                        except Exception as key_error:
-                            current_status = download_status.get(task_id, {})
-                            download_status[task_id] = {
-                                'status': 'error',
-                                'message': f'片段 {i + 1} 密钥下载失败: {str(key_error)}',
-                                'progress': download_status[task_id].get('progress', 0),
-                                'speed': None,
-                                'eta': None,
-                                'download_url': current_status.get('download_url')
-                            }
-                            return
-
-                    iv_hex = segment.key.iv
-                    if iv_hex:
-                        iv_str = iv_hex.lower().replace('0x', '')
-                        iv_str = iv_str.zfill(32)
-                        try:
-                            iv_bytes = bytes.fromhex(iv_str)
-                        except ValueError as iv_error:
-                            current_status = download_status.get(task_id, {})
-                            download_status[task_id] = {
-                                'status': 'error',
-                                'message': f'片段 {i + 1} IV 解析失败: {str(iv_error)}',
-                                'progress': download_status[task_id].get('progress', 0),
-                                'speed': None,
-                                'eta': None,
-                                'download_url': current_status.get('download_url')
-                            }
-                            return
-                    else:
-                        sequence_number = media_sequence + i
-                        iv_bytes = sequence_number.to_bytes(16, byteorder='big')
-
-                    if len(iv_bytes) != 16:
-                        current_status = download_status.get(task_id, {})
-                        download_status[task_id] = {
-                            'status': 'error',
-                            'message': f'片段 {i + 1} IV 长度无效，无法解密',
-                            'progress': download_status[task_id].get('progress', 0),
-                            'speed': None,
-                            'eta': None,
-                            'download_url': current_status.get('download_url')
-                        }
-                        return
-
+                try:
+                    output_file.close()
+                finally:
                     try:
-                        cipher = AES.new(key_bytes, AES.MODE_CBC, iv=iv_bytes)
-                        segment_data = cipher.decrypt(segment_data)
-                    except Exception as decrypt_error:
-                        current_status = download_status.get(task_id, {})
-                        download_status[task_id] = {
-                            'status': 'error',
-                            'message': f'片段 {i + 1} 解密失败: {str(decrypt_error)}',
-                            'progress': download_status[task_id].get('progress', 0),
-                            'speed': None,
-                            'eta': None,
-                            'download_url': current_status.get('download_url')
-                        }
-                        return
-
-                ts_files.append(segment_data)
-                downloaded_bytes += len(segment_data)
-
-                progress = int((i + 1) / total_segments * 100)
-                download_status[task_id]['progress'] = progress
-
-                elapsed = time.time() - start_time
-                speed_bytes_per_second = downloaded_bytes / elapsed if elapsed > 0 else 0
-                speed_mb_per_second = speed_bytes_per_second / (1024 * 1024) if speed_bytes_per_second else 0
-
-                average_segment_size = downloaded_bytes / (i + 1)
-                remaining_segments = total_segments - (i + 1)
-                remaining_bytes = average_segment_size * remaining_segments
-                eta_seconds = remaining_bytes / speed_bytes_per_second if speed_bytes_per_second else None
-
-                speed_text = f"{speed_mb_per_second:.2f} MB/s" if speed_bytes_per_second else None
-                eta_text = format_eta(eta_seconds)
-
-                download_status[task_id]['speed'] = speed_text
-                download_status[task_id]['eta'] = eta_text
-                download_status[task_id]['message'] = f'下载中... {i + 1}/{total_segments} ({progress}%)'
-
-            except Exception as e:
-                failed_segments.append(i)
-                current_status = download_status.get(task_id, {})
-                download_status[task_id] = {
-                    'status': 'error',
-                    'message': f'片段 {i + 1} 下载失败: {str(e)}。已下载的片段: {i}/{total_segments}',
-                    'progress': download_status[task_id].get('progress', 0),
-                    'speed': None,
-                    'eta': None,
-                    'download_url': current_status.get('download_url')
-                }
+                        if os.path.exists(temp_output_path):
+                            os.remove(temp_output_path)
+                    except OSError:
+                        pass
                 return
 
-        if failed_segments:
+            for i, segment in enumerate(playlist.segments):
+                segment_url = urljoin(base_url, segment.uri)
+
+                if not is_safe_url(segment_url):
+                    abort_download(f'片段 {i + 1} URL 指向内部网络资源，出于安全考虑已拒绝下载')
+                    return
+
+                try:
+                    seg_response = requests.get(segment_url, headers=headers, timeout=30)
+                    seg_response.raise_for_status()
+
+                    segment_data = seg_response.content
+
+                    if segment.key and segment.key.method and segment.key.method.upper() != 'NONE':
+                        method = segment.key.method.upper()
+
+                        if method != 'AES-128':
+                            abort_download(f'片段 {i + 1} 使用了不支持的加密方式: {method}')
+                            return
+
+                        key_uri = segment.key.uri
+                        key_url = urljoin(base_url, key_uri)
+
+                        if not is_safe_url(key_url):
+                            abort_download(f'片段 {i + 1} 密钥 URL 指向内部网络资源，出于安全考虑已拒绝下载')
+                            return
+
+                        key_bytes = key_cache.get(key_url)
+                        if key_bytes is None:
+                            try:
+                                key_response = requests.get(key_url, headers=headers, timeout=30)
+                                key_response.raise_for_status()
+                                key_bytes = key_response.content
+                                key_cache[key_url] = key_bytes
+                            except Exception as key_error:
+                                abort_download(f'片段 {i + 1} 密钥下载失败: {str(key_error)}')
+                                return
+
+                        iv_hex = segment.key.iv
+                        if iv_hex:
+                            iv_str = iv_hex.lower().replace('0x', '')
+                            iv_str = iv_str.zfill(32)
+                            try:
+                                iv_bytes = bytes.fromhex(iv_str)
+                            except ValueError as iv_error:
+                                abort_download(f'片段 {i + 1} IV 解析失败: {str(iv_error)}')
+                                return
+                        else:
+                            sequence_number = media_sequence + i
+                            iv_bytes = sequence_number.to_bytes(16, byteorder='big')
+
+                        if len(iv_bytes) != 16:
+                            abort_download(f'片段 {i + 1} IV 长度无效，无法解密')
+                            return
+
+                        try:
+                            cipher = AES.new(key_bytes, AES.MODE_CBC, iv=iv_bytes)
+                            segment_data = cipher.decrypt(segment_data)
+                        except Exception as decrypt_error:
+                            abort_download(f'片段 {i + 1} 解密失败: {str(decrypt_error)}')
+                            return
+
+                    output_file.write(segment_data)
+                    downloaded_bytes += len(segment_data)
+
+                    progress = int((i + 1) / total_segments * 100)
+                    download_status[task_id]['progress'] = progress
+
+                    elapsed = time.time() - start_time
+                    speed_bytes_per_second = downloaded_bytes / elapsed if elapsed > 0 else 0
+                    speed_mb_per_second = speed_bytes_per_second / (1024 * 1024) if speed_bytes_per_second else 0
+
+                    average_segment_size = downloaded_bytes / (i + 1)
+                    remaining_segments = total_segments - (i + 1)
+                    remaining_bytes = average_segment_size * remaining_segments
+                    eta_seconds = remaining_bytes / speed_bytes_per_second if speed_bytes_per_second else None
+
+                    speed_text = f"{speed_mb_per_second:.2f} MB/s" if speed_bytes_per_second else None
+                    eta_text = format_eta(eta_seconds)
+
+                    download_status[task_id]['speed'] = speed_text
+                    download_status[task_id]['eta'] = eta_text
+                    download_status[task_id]['message'] = f'下载中... {i + 1}/{total_segments} ({progress}%)'
+
+                except Exception as e:
+                    abort_download(f'片段 {i + 1} 下载失败: {str(e)}。已下载的片段: {i}/{total_segments}')
+                    return
+
+        try:
+            os.replace(temp_output_path, output_path)
+        except Exception as replace_error:
+            if os.path.exists(temp_output_path):
+                try:
+                    os.remove(temp_output_path)
+                except OSError:
+                    pass
             current_status = download_status.get(task_id, {})
+            progress = current_status.get('progress', 0)
             download_status[task_id] = {
                 'status': 'error',
-                'message': f'下载失败。有 {len(failed_segments)} 个片段下载失败。',
-                'progress': download_status[task_id].get('progress', 0),
+                'message': f'合并片段失败: {str(replace_error)}',
+                'progress': progress,
                 'speed': None,
                 'eta': None,
                 'download_url': current_status.get('download_url')
             }
             return
-        
-        output_path = os.path.join(DOWNLOAD_FOLDER, filename)
-        
-        with open(output_path, 'wb') as f:
-            for ts_data in ts_files:
-                f.write(ts_data)
-        
+
         download_status[task_id] = {
             'status': 'completed',
             'progress': 100,
@@ -320,6 +281,11 @@ def download_m3u8(url, filename, task_id):
         }
 
     except Exception as e:
+        if temp_output_path and os.path.exists(temp_output_path):
+            try:
+                os.remove(temp_output_path)
+            except OSError:
+                pass
         current_status = download_status.get(task_id, {})
         download_status[task_id] = {
             'status': 'error',
