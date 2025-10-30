@@ -2,6 +2,7 @@ import os
 import re
 import requests
 import m3u8
+from Crypto.Cipher import AES
 from flask import Flask, render_template, request, jsonify
 from urllib.parse import urljoin, urlparse
 from werkzeug.utils import secure_filename
@@ -70,13 +71,15 @@ def download_m3u8(url, filename, task_id):
         
         total_segments = len(playlist.segments)
         download_status[task_id]['message'] = f'找到 {total_segments} 个视频片段，开始下载...'
-        
+
         ts_files = []
         failed_segments = []
-        
+        key_cache = {}
+        media_sequence = getattr(playlist, 'media_sequence', 0)
+
         for i, segment in enumerate(playlist.segments):
             segment_url = urljoin(base_url, segment.uri)
-            
+
             if not is_safe_url(segment_url):
                 download_status[task_id] = {
                     'status': 'error',
@@ -87,12 +90,82 @@ def download_m3u8(url, filename, task_id):
             try:
                 seg_response = requests.get(segment_url, headers=headers, timeout=30)
                 seg_response.raise_for_status()
-                ts_files.append(seg_response.content)
-                
+
+                segment_data = seg_response.content
+
+                if segment.key and segment.key.method and segment.key.method.upper() != 'NONE':
+                    method = segment.key.method.upper()
+
+                    if method != 'AES-128':
+                        download_status[task_id] = {
+                            'status': 'error',
+                            'message': f'片段 {i + 1} 使用了不支持的加密方式: {method}'
+                        }
+                        return
+
+                    key_uri = segment.key.uri
+                    key_url = urljoin(base_url, key_uri)
+
+                    if not is_safe_url(key_url):
+                        download_status[task_id] = {
+                            'status': 'error',
+                            'message': f'密钥 URL 指向内部网络资源，出于安全考虑已拒绝下载'
+                        }
+                        return
+
+                    key_bytes = key_cache.get(key_url)
+                    if key_bytes is None:
+                        try:
+                            key_response = requests.get(key_url, headers=headers, timeout=30)
+                            key_response.raise_for_status()
+                            key_bytes = key_response.content
+                            key_cache[key_url] = key_bytes
+                        except Exception as key_error:
+                            download_status[task_id] = {
+                                'status': 'error',
+                                'message': f'片段 {i + 1} 密钥下载失败: {str(key_error)}'
+                            }
+                            return
+
+                    iv_hex = segment.key.iv
+                    if iv_hex:
+                        iv_str = iv_hex.lower().replace('0x', '')
+                        iv_str = iv_str.zfill(32)
+                        try:
+                            iv_bytes = bytes.fromhex(iv_str)
+                        except ValueError as iv_error:
+                            download_status[task_id] = {
+                                'status': 'error',
+                                'message': f'片段 {i + 1} IV 解析失败: {str(iv_error)}'
+                            }
+                            return
+                    else:
+                        sequence_number = media_sequence + i
+                        iv_bytes = sequence_number.to_bytes(16, byteorder='big')
+
+                    if len(iv_bytes) != 16:
+                        download_status[task_id] = {
+                            'status': 'error',
+                            'message': f'片段 {i + 1} IV 长度无效，无法解密'
+                        }
+                        return
+
+                    try:
+                        cipher = AES.new(key_bytes, AES.MODE_CBC, iv=iv_bytes)
+                        segment_data = cipher.decrypt(segment_data)
+                    except Exception as decrypt_error:
+                        download_status[task_id] = {
+                            'status': 'error',
+                            'message': f'片段 {i + 1} 解密失败: {str(decrypt_error)}'
+                        }
+                        return
+
+                ts_files.append(segment_data)
+
                 progress = int((i + 1) / total_segments * 100)
                 download_status[task_id]['progress'] = progress
                 download_status[task_id]['message'] = f'下载中... {i + 1}/{total_segments} ({progress}%)'
-                
+
             except Exception as e:
                 failed_segments.append(i)
                 download_status[task_id] = {
