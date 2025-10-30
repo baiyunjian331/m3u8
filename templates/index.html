@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M3U8 视频下载器 - 服务器版</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+        }
+        
+        h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+            text-align: center;
+            font-size: 28px;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+        }
+        
+        input[type="text"] {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 10px;
+            display: none;
+        }
+        
+        .status.show {
+            display: block;
+        }
+        
+        .status.info {
+            background: #e3f2fd;
+            color: #1976d2;
+            border-left: 4px solid #1976d2;
+        }
+        
+        .status.success {
+            background: #e8f5e9;
+            color: #388e3c;
+            border-left: 4px solid #388e3c;
+        }
+        
+        .status.error {
+            background: #ffebee;
+            color: #d32f2f;
+            border-left: 4px solid #d32f2f;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            margin-top: 10px;
+            overflow: hidden;
+            display: none;
+        }
+        
+        .progress-bar.show {
+            display: block;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s;
+            width: 0%;
+        }
+        
+        .files-list {
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 2px solid #e0e0e0;
+        }
+        
+        .files-list h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        
+        .file-item {
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📹 M3U8 视频下载器</h1>
+        <p class="subtitle">视频将保存到服务器的 files 文件夹中</p>
+        
+        <form id="downloadForm">
+            <div class="form-group">
+                <label for="m3u8Url">M3U8 链接</label>
+                <input type="text" id="m3u8Url" placeholder="请输入 M3U8 视频链接" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="filename">文件名</label>
+                <input type="text" id="filename" placeholder="video.mp4" value="video.mp4">
+            </div>
+            
+            <button type="submit" id="downloadBtn">开始下载</button>
+        </form>
+        
+        <div id="status" class="status"></div>
+        <div id="progressBar" class="progress-bar">
+            <div id="progressFill" class="progress-fill"></div>
+        </div>
+        
+        <div class="files-list">
+            <h3>已下载的文件</h3>
+            <div id="filesList"></div>
+        </div>
+    </div>
+    
+    <script>
+        let statusCheckInterval;
+        
+        document.getElementById('downloadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const url = document.getElementById('m3u8Url').value;
+            const filename = document.getElementById('filename').value;
+            const downloadBtn = document.getElementById('downloadBtn');
+            const statusDiv = document.getElementById('status');
+            const progressBar = document.getElementById('progressBar');
+            const progressFill = document.getElementById('progressFill');
+            
+            downloadBtn.disabled = true;
+            downloadBtn.textContent = '下载中...';
+            
+            try {
+                const response = await fetch('/download', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ url, filename })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    const taskId = data.task_id;
+                    
+                    statusDiv.className = 'status info show';
+                    statusDiv.textContent = data.message;
+                    progressBar.classList.add('show');
+                    
+                    if (statusCheckInterval) {
+                        clearInterval(statusCheckInterval);
+                    }
+                    
+                    statusCheckInterval = setInterval(async () => {
+                        const statusResponse = await fetch(`/status/${taskId}`);
+                        const statusData = await statusResponse.json();
+                        
+                        statusDiv.textContent = statusData.message;
+                        
+                        if (statusData.progress) {
+                            progressFill.style.width = statusData.progress + '%';
+                        }
+                        
+                        if (statusData.status === 'completed') {
+                            clearInterval(statusCheckInterval);
+                            statusDiv.className = 'status success show';
+                            downloadBtn.disabled = false;
+                            downloadBtn.textContent = '开始下载';
+                            loadFiles();
+                        } else if (statusData.status === 'error') {
+                            clearInterval(statusCheckInterval);
+                            statusDiv.className = 'status error show';
+                            downloadBtn.disabled = false;
+                            downloadBtn.textContent = '开始下载';
+                            progressBar.classList.remove('show');
+                        }
+                    }, 1000);
+                } else {
+                    statusDiv.className = 'status error show';
+                    statusDiv.textContent = data.error || '下载失败';
+                    downloadBtn.disabled = false;
+                    downloadBtn.textContent = '开始下载';
+                }
+            } catch (error) {
+                statusDiv.className = 'status error show';
+                statusDiv.textContent = '网络错误: ' + error.message;
+                downloadBtn.disabled = false;
+                downloadBtn.textContent = '开始下载';
+            }
+        });
+        
+        async function loadFiles() {
+            try {
+                const response = await fetch('/files');
+                const data = await response.json();
+                const filesList = document.getElementById('filesList');
+                
+                if (data.files.length === 0) {
+                    filesList.innerHTML = '<p style="color: #999;">暂无文件</p>';
+                } else {
+                    filesList.innerHTML = data.files.map(file => 
+                        `<div class="file-item">📁 ${file}</div>`
+                    ).join('');
+                }
+            } catch (error) {
+                console.error('加载文件列表失败:', error);
+            }
+        }
+        
+        loadFiles();
+    </script>
+</body>
+</html>

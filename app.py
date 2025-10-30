@@ -1,0 +1,178 @@
+import os
+import re
+import requests
+import m3u8
+from flask import Flask, render_template, request, jsonify
+from urllib.parse import urljoin, urlparse
+from werkzeug.utils import secure_filename
+import threading
+import ipaddress
+import socket
+
+app = Flask(__name__)
+
+DOWNLOAD_FOLDER = 'files'
+if not os.path.exists(DOWNLOAD_FOLDER):
+    os.makedirs(DOWNLOAD_FOLDER)
+
+download_status = {}
+
+def is_safe_url(url):
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        
+        if not hostname:
+            return False
+        
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                return False
+        except ValueError:
+            try:
+                resolved_ip = socket.gethostbyname(hostname)
+                ip = ipaddress.ip_address(resolved_ip)
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    return False
+            except (socket.gaierror, ValueError):
+                return False
+        
+        return True
+    except Exception:
+        return False
+
+def download_m3u8(url, filename, task_id):
+    try:
+        download_status[task_id] = {'status': 'downloading', 'progress': 0, 'message': '正在解析 M3U8 文件...'}
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        playlist = m3u8.loads(response.text)
+        
+        if playlist.playlists:
+            download_status[task_id] = {
+                'status': 'error', 
+                'message': '检测到多个视频流（variant playlist）。请从浏览器开发工具中找到具体的视频流 m3u8 链接，而不是主索引文件。'
+            }
+            return
+        
+        if not playlist.segments:
+            download_status[task_id] = {'status': 'error', 'message': '未找到视频片段。请确认这是一个有效的 m3u8 视频文件链接。'}
+            return
+        
+        base_url = url.rsplit('/', 1)[0] + '/'
+        
+        total_segments = len(playlist.segments)
+        download_status[task_id]['message'] = f'找到 {total_segments} 个视频片段，开始下载...'
+        
+        ts_files = []
+        failed_segments = []
+        
+        for i, segment in enumerate(playlist.segments):
+            segment_url = urljoin(base_url, segment.uri)
+            
+            if not is_safe_url(segment_url):
+                download_status[task_id] = {
+                    'status': 'error',
+                    'message': f'片段 {i + 1} URL 指向内部网络资源，出于安全考虑已拒绝下载'
+                }
+                return
+            
+            try:
+                seg_response = requests.get(segment_url, headers=headers, timeout=30)
+                seg_response.raise_for_status()
+                ts_files.append(seg_response.content)
+                
+                progress = int((i + 1) / total_segments * 100)
+                download_status[task_id]['progress'] = progress
+                download_status[task_id]['message'] = f'下载中... {i + 1}/{total_segments} ({progress}%)'
+                
+            except Exception as e:
+                failed_segments.append(i)
+                download_status[task_id] = {
+                    'status': 'error',
+                    'message': f'片段 {i + 1} 下载失败: {str(e)}。已下载的片段: {i}/{total_segments}'
+                }
+                return
+        
+        if failed_segments:
+            download_status[task_id] = {
+                'status': 'error',
+                'message': f'下载失败。有 {len(failed_segments)} 个片段下载失败。'
+            }
+            return
+        
+        output_path = os.path.join(DOWNLOAD_FOLDER, filename)
+        
+        with open(output_path, 'wb') as f:
+            for ts_data in ts_files:
+                f.write(ts_data)
+        
+        download_status[task_id] = {
+            'status': 'completed',
+            'progress': 100,
+            'message': f'下载完成！文件已保存到: {output_path}'
+        }
+        
+    except Exception as e:
+        download_status[task_id] = {
+            'status': 'error',
+            'message': f'下载失败: {str(e)}'
+        }
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/download', methods=['POST'])
+def start_download():
+    data = request.json
+    url = data.get('url')
+    filename = data.get('filename', 'video.mp4')
+    
+    if not url:
+        return jsonify({'error': '请提供 M3U8 链接'}), 400
+    
+    if not url.startswith(('http://', 'https://')):
+        return jsonify({'error': '无效的 URL 格式'}), 400
+    
+    if not is_safe_url(url):
+        return jsonify({'error': 'URL 指向内部网络资源，出于安全考虑已拒绝'}), 400
+    
+    filename = secure_filename(filename)
+    if not filename:
+        filename = 'video.mp4'
+    
+    if not filename.endswith('.mp4'):
+        filename += '.mp4'
+    
+    safe_path = os.path.abspath(os.path.join(DOWNLOAD_FOLDER, filename))
+    if not safe_path.startswith(os.path.abspath(DOWNLOAD_FOLDER)):
+        return jsonify({'error': '无效的文件名'}), 400
+    
+    task_id = str(hash(url + filename))
+    
+    thread = threading.Thread(target=download_m3u8, args=(url, filename, task_id))
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({'task_id': task_id, 'message': '开始下载任务'})
+
+@app.route('/status/<task_id>')
+def get_status(task_id):
+    status = download_status.get(task_id, {'status': 'not_found', 'message': '任务不存在'})
+    return jsonify(status)
+
+@app.route('/files')
+def list_files():
+    files = os.listdir(DOWNLOAD_FOLDER)
+    return jsonify({'files': files})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
