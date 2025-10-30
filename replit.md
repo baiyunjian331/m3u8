@@ -67,6 +67,7 @@ The application provides three distinct interfaces for the same core functionali
 3. Parses M3U8 playlist and downloads segments asynchronously
 4. Merges segments using FFmpeg
 5. Returns download status via polling
+6. Generates UUIDv4 task identifiers so repeated submissions of the same URL are tracked separately
 
 **Security Design**: 
 - URL validation prevents access to private/internal networks

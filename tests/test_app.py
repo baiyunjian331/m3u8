@@ -1,8 +1,12 @@
+import os
 import socket
 import sys
 import types
 import unittest
 from unittest import mock
+import uuid
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
 def _install_stub_module(name, **attributes):
@@ -50,7 +54,16 @@ werkzeug_utils_module = _install_stub_module(
 )
 setattr(werkzeug_module, "utils", werkzeug_utils_module)
 
+import app
 from app import is_safe_url
+
+
+class _DummyThread:
+    def __init__(self, *args, **kwargs):
+        self.daemon = False
+
+    def start(self):
+        pass
 
 
 class IsSafeUrlTests(unittest.TestCase):
@@ -71,6 +84,35 @@ class IsSafeUrlTests(unittest.TestCase):
 
         with mock.patch("app.socket.getaddrinfo", return_value=addr_info):
             self.assertFalse(is_safe_url(url))
+
+
+class StartDownloadTests(unittest.TestCase):
+    def test_repeated_submissions_generate_unique_uuid_task_ids(self):
+        fake_uuid_values = [
+            uuid.UUID("12345678-1234-5678-1234-567812345678"),
+            uuid.UUID("87654321-4321-8765-4321-876543218765"),
+        ]
+
+        request_payload = {
+            "url": "https://example.com/video.m3u8",
+            "filename": "video.mp4",
+        }
+
+        with mock.patch("app.jsonify", side_effect=lambda payload: payload):
+            with mock.patch("app.threading.Thread", side_effect=lambda *a, **k: _DummyThread()):
+                with mock.patch("app.uuid.uuid4", side_effect=fake_uuid_values):
+                    task_ids = []
+                    for _ in range(2):
+                        with mock.patch("app.request", types.SimpleNamespace(json=request_payload.copy())):
+                            response = app.start_download()
+                        task_ids.append(response["task_id"])
+
+        self.assertEqual(len(task_ids), 2)
+        self.assertNotEqual(task_ids[0], task_ids[1])
+        for task_id in task_ids:
+            self.assertIsInstance(task_id, str)
+            # Ensure the returned identifier is a valid UUID string
+            self.assertEqual(task_id, str(uuid.UUID(task_id)))
 
 
 if __name__ == "__main__":
