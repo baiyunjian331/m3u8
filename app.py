@@ -3,6 +3,7 @@ import re
 import requests
 import m3u8
 import time
+import uuid
 from Crypto.Cipher import AES
 from flask import Flask, render_template, request, jsonify, send_from_directory, abort
 from urllib.parse import urljoin, urlparse
@@ -326,7 +327,7 @@ def start_download():
     if not safe_path.startswith(os.path.abspath(DOWNLOAD_FOLDER)):
         return jsonify({'error': '无效的文件名'}), 400
     
-    task_id = str(hash(url + filename))
+    task_id = str(uuid.uuid4())
     
     thread = threading.Thread(target=download_m3u8, args=(url, filename, task_id))
     thread.daemon = True
