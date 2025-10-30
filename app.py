@@ -2,7 +2,8 @@ import os
 import re
 import requests
 import m3u8
-from flask import Flask, render_template, request, jsonify
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify, send_from_directory, abort, url_for
 from urllib.parse import urljoin, urlparse
 from werkzeug.utils import secure_filename
 import threading
@@ -16,6 +17,42 @@ if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
 download_status = {}
+
+
+def extract_variant_streams(master_playlist, master_url):
+    """Return variant metadata (only keeping safe URLs) and the best option."""
+
+    variants = []
+    best_variant = None
+
+    for variant in getattr(master_playlist, 'playlists', []) or []:
+        stream_info = getattr(variant, 'stream_info', None)
+        bandwidth = getattr(stream_info, 'bandwidth', 0) or 0
+        resolution = getattr(stream_info, 'resolution', None)
+        resolution_text = None
+
+        if resolution and isinstance(resolution, (list, tuple)) and len(resolution) == 2:
+            resolution_text = f"{resolution[0]}x{resolution[1]}"
+
+        absolute_uri = urljoin(master_url, variant.uri)
+
+        if not is_safe_url(absolute_uri):
+            continue
+
+        variant_data = {
+            'uri': variant.uri,
+            'absolute_uri': absolute_uri,
+            'bandwidth': bandwidth,
+            'resolution': resolution_text,
+            'codecs': getattr(stream_info, 'codecs', None),
+        }
+
+        variants.append(variant_data)
+
+        if not best_variant or bandwidth > best_variant['bandwidth']:
+            best_variant = variant_data
+
+    return variants, best_variant
 
 def is_safe_url(url):
     try:
@@ -42,32 +79,62 @@ def is_safe_url(url):
     except Exception:
         return False
 
-def download_m3u8(url, filename, task_id):
+def download_m3u8(url, filename, task_id, variant_url=None):
     try:
         download_status[task_id] = {'status': 'downloading', 'progress': 0, 'message': '正在解析 M3U8 文件...'}
-        
+
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-        
+
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
-        
+
         playlist = m3u8.loads(response.text)
-        
-        if playlist.playlists:
+
+        selected_variant_url = variant_url
+        variants, best_variant = extract_variant_streams(playlist, url)
+
+        if variants and not selected_variant_url:
+            if not best_variant:
+                download_status[task_id] = {
+                    'status': 'error',
+                    'message': '找到的清晰度选项均不可用，请尝试其他链接。'
+                }
+                return
+
+            selected_variant_url = best_variant['absolute_uri']
+            download_status[task_id]['message'] = '检测到多个清晰度，已自动选择最高质量进行下载...'
+
+        if selected_variant_url:
+            if not is_safe_url(selected_variant_url):
+                download_status[task_id] = {
+                    'status': 'error',
+                    'message': '所选清晰度的视频流地址不安全，已终止下载。'
+                }
+                return
+
+            if variant_url:
+                download_status[task_id]['message'] = '已选择指定清晰度，正在准备下载...'
+
+            variant_response = requests.get(selected_variant_url, headers=headers, timeout=30)
+            variant_response.raise_for_status()
+            playlist = m3u8.loads(variant_response.text)
+            base_url = selected_variant_url.rsplit('/', 1)[0] + '/'
+        else:
+            base_url = url.rsplit('/', 1)[0] + '/'
+
+        if variants and not selected_variant_url:
             download_status[task_id] = {
-                'status': 'error', 
-                'message': '检测到多个视频流（variant playlist）。请从浏览器开发工具中找到具体的视频流 m3u8 链接，而不是主索引文件。'
+                'status': 'error',
+                'message': '未能确定可下载的视频流，请尝试手动选择。'
             }
             return
-        
+
         if not playlist.segments:
             download_status[task_id] = {'status': 'error', 'message': '未找到视频片段。请确认这是一个有效的 m3u8 视频文件链接。'}
             return
-        
-        base_url = url.rsplit('/', 1)[0] + '/'
-        
+
         total_segments = len(playlist.segments)
         download_status[task_id]['message'] = f'找到 {total_segments} 个视频片段，开始下载...'
         
@@ -132,36 +199,90 @@ def index():
 
 @app.route('/download', methods=['POST'])
 def start_download():
-    data = request.json
+    data = request.json or {}
     url = data.get('url')
     filename = data.get('filename', 'video.mp4')
-    
+    variant_uri = data.get('variant_uri')
+
     if not url:
         return jsonify({'error': '请提供 M3U8 链接'}), 400
-    
+
     if not url.startswith(('http://', 'https://')):
         return jsonify({'error': '无效的 URL 格式'}), 400
-    
+
     if not is_safe_url(url):
         return jsonify({'error': 'URL 指向内部网络资源，出于安全考虑已拒绝'}), 400
-    
+
     filename = secure_filename(filename)
     if not filename:
         filename = 'video.mp4'
-    
+
     if not filename.endswith('.mp4'):
         filename += '.mp4'
-    
+
     safe_path = os.path.abspath(os.path.join(DOWNLOAD_FOLDER, filename))
     if not safe_path.startswith(os.path.abspath(DOWNLOAD_FOLDER)):
         return jsonify({'error': '无效的文件名'}), 400
-    
-    task_id = str(hash(url + filename))
-    
-    thread = threading.Thread(target=download_m3u8, args=(url, filename, task_id))
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+    except Exception as exc:
+        return jsonify({'error': f'无法访问 M3U8 文件: {str(exc)}'}), 400
+
+    playlist = m3u8.loads(response.text)
+    variants, best_variant = extract_variant_streams(playlist, url)
+
+    selected_variant_url = None
+
+    if variants:
+        if not best_variant:
+            return jsonify({'error': '找到的清晰度选项均不可用，请尝试其他链接。'}), 400
+
+        if not variant_uri:
+            simplified_variants = []
+            for variant in variants:
+                simplified_variants.append({
+                    'uri': variant['uri'],
+                    'bandwidth': variant['bandwidth'],
+                    'resolution': variant['resolution'],
+                    'codecs': variant['codecs']
+                })
+
+            return jsonify({
+                'message': '检测到多个清晰度，请选择后继续下载。',
+                'variants': simplified_variants,
+                'default': best_variant['uri']
+            })
+
+        # 用户提交了选择，需要确认其有效性
+        matching_variant = None
+        for variant in variants:
+            if variant_uri == variant['uri'] or variant_uri == variant['absolute_uri']:
+                matching_variant = variant
+                break
+
+        if not matching_variant:
+            return jsonify({'error': '提交的清晰度选项无效或已过期，请重新选择。'}), 400
+
+        selected_variant_url = matching_variant['absolute_uri']
+    else:
+        if variant_uri:
+            return jsonify({'error': '该链接没有可选择的清晰度选项。'}), 400
+
+        if not playlist.segments:
+            return jsonify({'error': '未找到视频片段。请确认这是一个有效的 m3u8 视频文件链接。'}), 400
+
+    task_id = str(hash(url + filename + (selected_variant_url or '')))
+
+    thread = threading.Thread(target=download_m3u8, args=(url, filename, task_id, selected_variant_url))
     thread.daemon = True
     thread.start()
-    
+
     return jsonify({'task_id': task_id, 'message': '开始下载任务'})
 
 @app.route('/status/<task_id>')
@@ -169,10 +290,57 @@ def get_status(task_id):
     status = download_status.get(task_id, {'status': 'not_found', 'message': '任务不存在'})
     return jsonify(status)
 
+def format_file_size(size_bytes):
+    if size_bytes == 0:
+        return '0 B'
+    units = ['B', 'KB', 'MB', 'GB', 'TB']
+    size = float(size_bytes)
+    unit_index = 0
+    while size >= 1024 and unit_index < len(units) - 1:
+        size /= 1024
+        unit_index += 1
+    return f"{size:.2f} {units[unit_index]}"
+
+
 @app.route('/files')
 def list_files():
-    files = os.listdir(DOWNLOAD_FOLDER)
+    files = []
+    for entry in os.scandir(DOWNLOAD_FOLDER):
+        if entry.is_file():
+            stat = entry.stat()
+            files.append({
+                'name': entry.name,
+                'url': url_for('serve_file', filename=entry.name),
+                'size': format_file_size(stat.st_size),
+                'created_at': datetime.fromtimestamp(stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S'),
+                '_sort_key': stat.st_ctime
+            })
+
+    files.sort(key=lambda item: item['_sort_key'], reverse=True)
+    for file_item in files:
+        file_item.pop('_sort_key', None)
+
     return jsonify({'files': files})
+
+
+@app.route('/files/<path:filename>')
+def serve_file(filename):
+    download_root = os.path.abspath(DOWNLOAD_FOLDER)
+    requested_path = os.path.abspath(os.path.join(download_root, filename))
+
+    try:
+        common_path = os.path.commonpath([download_root, requested_path])
+    except ValueError:
+        abort(404)
+
+    if common_path != download_root:
+        abort(404)
+
+    if not os.path.isfile(requested_path):
+        abort(404)
+
+    safe_relative_path = os.path.relpath(requested_path, download_root)
+    return send_from_directory(download_root, safe_relative_path, as_attachment=True)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
