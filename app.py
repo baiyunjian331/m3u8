@@ -299,8 +299,8 @@ def list_files():
 
 @app.route('/files/<path:filename>')
 def serve_file(filename):
-    download_root = os.path.abspath(DOWNLOAD_FOLDER)
-    requested_path = os.path.abspath(os.path.join(download_root, filename))
+    download_root = os.path.realpath(DOWNLOAD_FOLDER)
+    requested_path = os.path.realpath(os.path.join(download_root, filename))
 
     try:
         common_path = os.path.commonpath([download_root, requested_path])
