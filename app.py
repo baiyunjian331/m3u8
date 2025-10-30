@@ -38,23 +38,44 @@ def is_safe_url(url):
     try:
         parsed = urlparse(url)
         hostname = parsed.hostname
-        
+
         if not hostname:
             return False
-        
+
+        addresses = []
         try:
             ip = ipaddress.ip_address(hostname)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                return False
+            addresses.append(ip)
         except ValueError:
             try:
-                resolved_ip = socket.gethostbyname(hostname)
-                ip = ipaddress.ip_address(resolved_ip)
-                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                    return False
-            except (socket.gaierror, ValueError):
+                addr_info = socket.getaddrinfo(hostname, None)
+            except socket.gaierror:
                 return False
-        
+
+            for _, _, _, _, sockaddr in addr_info:
+                if not sockaddr:
+                    continue
+
+                address = sockaddr[0]
+                try:
+                    resolved_ip = ipaddress.ip_address(address)
+                except ValueError:
+                    return False
+
+                addresses.append(resolved_ip)
+
+            if not addresses:
+                return False
+
+        for resolved_ip in addresses:
+            if (
+                resolved_ip.is_private
+                or resolved_ip.is_loopback
+                or resolved_ip.is_link_local
+                or resolved_ip.is_reserved
+            ):
+                return False
+
         return True
     except Exception:
         return False
