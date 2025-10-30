@@ -257,7 +257,7 @@
                         
                         statusDiv.textContent = statusData.message;
                         
-                        if (statusData.progress) {
+                        if (typeof statusData.progress === 'number') {
                             progressFill.style.width = statusData.progress + '%';
                         }
                         

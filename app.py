@@ -188,10 +188,9 @@ def list_files():
     for entry in os.scandir(DOWNLOAD_FOLDER):
         if entry.is_file():
             stat = entry.stat()
-            relative_path = os.path.relpath(entry.path, DOWNLOAD_FOLDER)
             files.append({
                 'name': entry.name,
-                'url': url_for('serve_file', filename=relative_path),
+                'url': url_for('serve_file', filename=entry.name),
                 'size': format_file_size(stat.st_size),
                 'created_at': datetime.fromtimestamp(stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S'),
                 '_sort_key': stat.st_ctime
@@ -209,7 +208,12 @@ def serve_file(filename):
     download_root = os.path.abspath(DOWNLOAD_FOLDER)
     requested_path = os.path.abspath(os.path.join(download_root, filename))
 
-    if not requested_path.startswith(download_root + os.sep):
+    try:
+        common_path = os.path.commonpath([download_root, requested_path])
+    except ValueError:
+        abort(404)
+
+    if common_path != download_root:
         abort(404)
 
     if not os.path.isfile(requested_path):
