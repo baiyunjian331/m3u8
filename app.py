@@ -2,7 +2,8 @@ import os
 import re
 import requests
 import m3u8
-from flask import Flask, render_template, request, jsonify
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify, send_from_directory, abort, url_for
 from urllib.parse import urljoin, urlparse
 from werkzeug.utils import secure_filename
 import threading
@@ -169,10 +170,53 @@ def get_status(task_id):
     status = download_status.get(task_id, {'status': 'not_found', 'message': '任务不存在'})
     return jsonify(status)
 
+def format_file_size(size_bytes):
+    if size_bytes == 0:
+        return '0 B'
+    units = ['B', 'KB', 'MB', 'GB', 'TB']
+    size = float(size_bytes)
+    unit_index = 0
+    while size >= 1024 and unit_index < len(units) - 1:
+        size /= 1024
+        unit_index += 1
+    return f"{size:.2f} {units[unit_index]}"
+
+
 @app.route('/files')
 def list_files():
-    files = os.listdir(DOWNLOAD_FOLDER)
+    files = []
+    for entry in os.scandir(DOWNLOAD_FOLDER):
+        if entry.is_file():
+            stat = entry.stat()
+            relative_path = os.path.relpath(entry.path, DOWNLOAD_FOLDER)
+            files.append({
+                'name': entry.name,
+                'url': url_for('serve_file', filename=relative_path),
+                'size': format_file_size(stat.st_size),
+                'created_at': datetime.fromtimestamp(stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S'),
+                '_sort_key': stat.st_ctime
+            })
+
+    files.sort(key=lambda item: item['_sort_key'], reverse=True)
+    for file_item in files:
+        file_item.pop('_sort_key', None)
+
     return jsonify({'files': files})
+
+
+@app.route('/files/<path:filename>')
+def serve_file(filename):
+    download_root = os.path.abspath(DOWNLOAD_FOLDER)
+    requested_path = os.path.abspath(os.path.join(download_root, filename))
+
+    if not requested_path.startswith(download_root + os.sep):
+        abort(404)
+
+    if not os.path.isfile(requested_path):
+        abort(404)
+
+    safe_relative_path = os.path.relpath(requested_path, download_root)
+    return send_from_directory(download_root, safe_relative_path, as_attachment=True)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)

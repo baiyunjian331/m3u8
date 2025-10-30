@@ -160,11 +160,26 @@
         }
         
         .file-item {
-            padding: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 14px;
             background: #f5f5f5;
             border-radius: 8px;
             margin-bottom: 8px;
             color: #333;
+            text-decoration: none;
+            transition: background 0.2s;
+        }
+
+        .file-item:hover {
+            background: #e8e8e8;
+        }
+
+        .file-meta {
+            color: #666;
+            font-size: 12px;
+            margin-left: 12px;
         }
     </style>
 </head>
@@ -283,8 +298,11 @@
                 if (data.files.length === 0) {
                     filesList.innerHTML = '<p style="color: #999;">暂无文件</p>';
                 } else {
-                    filesList.innerHTML = data.files.map(file => 
-                        `<div class="file-item">📁 ${file}</div>`
+                    filesList.innerHTML = data.files.map(file =>
+                        `<a class="file-item" href="${file.url}" download>
+                            <span>📁 ${file.name}</span>
+                            <span class="file-meta">${file.size} · ${file.created_at}</span>
+                        </a>`
                     ).join('');
                 }
             } catch (error) {
