@@ -125,7 +125,73 @@
             color: #d32f2f;
             border-left: 4px solid #d32f2f;
         }
-        
+
+        .variant-selection {
+            display: none;
+            margin-top: 20px;
+            padding: 16px;
+            border-radius: 10px;
+            background: #f5f5ff;
+            border: 1px solid rgba(102, 126, 234, 0.3);
+        }
+
+        .variant-selection.show {
+            display: block;
+        }
+
+        .variant-selection h4 {
+            font-size: 16px;
+            margin-bottom: 12px;
+            color: #555;
+        }
+
+        .variant-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+            color: #333;
+        }
+
+        .variant-option:hover {
+            background: rgba(102, 126, 234, 0.08);
+        }
+
+        .variant-option input {
+            accent-color: #667eea;
+        }
+
+        .variant-details {
+            font-size: 14px;
+        }
+
+        .variant-meta {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .secondary-button {
+            margin-top: 12px;
+            width: 100%;
+            padding: 12px;
+            background: white;
+            color: #667eea;
+            border: 2px solid #667eea;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s;
+        }
+
+        .secondary-button:hover {
+            background: #667eea;
+            color: white;
+        }
+
         .progress-bar {
             width: 100%;
             height: 8px;
@@ -206,43 +272,95 @@
         <div id="progressBar" class="progress-bar">
             <div id="progressFill" class="progress-fill"></div>
         </div>
-        
+
+        <div id="variantSelection" class="variant-selection">
+            <h4>选择下载清晰度</h4>
+            <div id="variantOptions"></div>
+            <button type="button" id="confirmVariantBtn" class="secondary-button">确认下载</button>
+        </div>
+
         <div class="files-list">
             <h3>已下载的文件</h3>
             <div id="filesList"></div>
         </div>
     </div>
-    
+
     <script>
         let statusCheckInterval;
-        
-        document.getElementById('downloadForm').addEventListener('submit', async (e) => {
+        let pendingDownloadPayload = null;
+
+        const downloadForm = document.getElementById('downloadForm');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const statusDiv = document.getElementById('status');
+        const progressBar = document.getElementById('progressBar');
+        const progressFill = document.getElementById('progressFill');
+        const variantSelection = document.getElementById('variantSelection');
+        const variantOptions = document.getElementById('variantOptions');
+        const confirmVariantBtn = document.getElementById('confirmVariantBtn');
+
+        downloadForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            
+
             const url = document.getElementById('m3u8Url').value;
             const filename = document.getElementById('filename').value;
-            const downloadBtn = document.getElementById('downloadBtn');
-            const statusDiv = document.getElementById('status');
-            const progressBar = document.getElementById('progressBar');
-            const progressFill = document.getElementById('progressFill');
-            
+
             downloadBtn.disabled = true;
             downloadBtn.textContent = '下载中...';
-            
+            variantSelection.classList.remove('show');
+            pendingDownloadPayload = null;
+            variantOptions.innerHTML = '';
+            progressBar.classList.remove('show');
+            progressFill.style.width = '0%';
+
+            await initiateDownload({ url, filename });
+        });
+
+        confirmVariantBtn.addEventListener('click', async () => {
+            const selected = document.querySelector('input[name="variantOption"]:checked');
+            if (!selected || !pendingDownloadPayload) {
+                return;
+            }
+
+            downloadBtn.disabled = true;
+            downloadBtn.textContent = '下载中...';
+            variantSelection.classList.remove('show');
+
+            const payload = {
+                ...pendingDownloadPayload,
+                variant_uri: selected.value
+            };
+
+            pendingDownloadPayload = null;
+            await initiateDownload(payload);
+        });
+
+        async function initiateDownload(payload) {
+            const { url, filename, variant_uri } = payload;
+
             try {
                 const response = await fetch('/download', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ url, filename })
+                    body: JSON.stringify({ url, filename, variant_uri })
                 });
-                
+
                 const data = await response.json();
-                
+
                 if (response.ok) {
+                    if (data.variants) {
+                        pendingDownloadPayload = { url, filename };
+                        showVariantSelection(data.variants, data.default);
+                        statusDiv.className = 'status info show';
+                        statusDiv.textContent = data.message || '请选择需要下载的清晰度。';
+                        downloadBtn.disabled = false;
+                        downloadBtn.textContent = '开始下载';
+                        return;
+                    }
+
                     const taskId = data.task_id;
-                    
+
                     statusDiv.className = 'status info show';
                     statusDiv.textContent = data.message;
                     progressBar.classList.add('show');
@@ -287,8 +405,35 @@
                 downloadBtn.disabled = false;
                 downloadBtn.textContent = '开始下载';
             }
-        });
-        
+        }
+
+        function showVariantSelection(variants, defaultUri) {
+            if (!Array.isArray(variants) || variants.length === 0) {
+                return;
+            }
+
+            variantOptions.innerHTML = variants.map((variant, index) => {
+                const bandwidth = variant.bandwidth ? (variant.bandwidth / 1000000).toFixed(2) : null;
+                const resolution = variant.resolution || '未知分辨率';
+                const codecs = variant.codecs || '';
+                const bandwidthText = bandwidth ? `${bandwidth} Mbps` : '未知码率';
+                const codecsText = codecs ? ` · ${codecs}` : '';
+                const isDefault = defaultUri ? variant.uri === defaultUri : index === 0;
+
+                return `
+                    <label class="variant-option">
+                        <input type="radio" name="variantOption" value="${variant.uri}" ${isDefault ? 'checked' : ''}>
+                        <div>
+                            <div class="variant-details">${resolution}</div>
+                            <div class="variant-meta">${bandwidthText}${codecsText}</div>
+                        </div>
+                    </label>
+                `;
+            }).join('');
+
+            variantSelection.classList.add('show');
+        }
+
         async function loadFiles() {
             try {
                 const response = await fetch('/files');
