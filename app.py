@@ -132,7 +132,10 @@ def download_m3u8(url, filename, task_id, variant_url=None):
             return
 
         if not playlist.segments:
-            download_status[task_id] = {'status': 'error', 'message': '未找到视频片段。请确认这是一个有效的 m3u8 视频文件链接。'}
+            download_status[task_id] = {
+                'status': 'error',
+                'message': '未找到视频片段。请确认这是一个有效的 m3u8 视频文件链接。'
+            }
             return
 
         total_segments = len(playlist.segments)
