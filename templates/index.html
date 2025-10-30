@@ -125,6 +125,26 @@
             color: #d32f2f;
             border-left: 4px solid #d32f2f;
         }
+
+        .metrics {
+            margin-top: 10px;
+            padding: 10px 15px;
+            background: rgba(102, 126, 234, 0.1);
+            border-radius: 8px;
+            color: #444;
+            display: none;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 14px;
+        }
+
+        .metrics.show {
+            display: flex;
+        }
+
+        .metrics span {
+            flex: 1;
+        }
         
         .progress-bar {
             width: 100%;
@@ -191,6 +211,10 @@
         <div id="progressBar" class="progress-bar">
             <div id="progressFill" class="progress-fill"></div>
         </div>
+        <div id="metrics" class="metrics">
+            <span id="speedInfo"></span>
+            <span id="etaInfo" style="text-align: right;"></span>
+        </div>
         
         <div class="files-list">
             <h3>已下载的文件</h3>
@@ -210,10 +234,17 @@
             const statusDiv = document.getElementById('status');
             const progressBar = document.getElementById('progressBar');
             const progressFill = document.getElementById('progressFill');
-            
+            const metricsDiv = document.getElementById('metrics');
+            const speedInfo = document.getElementById('speedInfo');
+            const etaInfo = document.getElementById('etaInfo');
+
             downloadBtn.disabled = true;
             downloadBtn.textContent = '下载中...';
-            
+            progressFill.style.width = '0%';
+            metricsDiv.classList.remove('show');
+            speedInfo.textContent = '';
+            etaInfo.textContent = '';
+
             try {
                 const response = await fetch('/download', {
                     method: 'POST',
@@ -239,18 +270,31 @@
                     statusCheckInterval = setInterval(async () => {
                         const statusResponse = await fetch(`/status/${taskId}`);
                         const statusData = await statusResponse.json();
-                        
+
                         statusDiv.textContent = statusData.message;
-                        
-                        if (statusData.progress) {
+
+                        if (typeof statusData.progress === 'number') {
                             progressFill.style.width = statusData.progress + '%';
                         }
-                        
+
+                        if (statusData.status === 'downloading') {
+                            metricsDiv.classList.add('show');
+                            speedInfo.textContent = '速度：' + (statusData.speed || '计算中...');
+                            etaInfo.textContent = '剩余时间：' + (statusData.eta || '计算中...');
+                        } else {
+                            metricsDiv.classList.remove('show');
+                            speedInfo.textContent = '';
+                            etaInfo.textContent = '';
+                        }
+
                         if (statusData.status === 'completed') {
                             clearInterval(statusCheckInterval);
                             statusDiv.className = 'status success show';
                             downloadBtn.disabled = false;
                             downloadBtn.textContent = '开始下载';
+                            metricsDiv.classList.remove('show');
+                            speedInfo.textContent = '';
+                            etaInfo.textContent = '';
                             loadFiles();
                         } else if (statusData.status === 'error') {
                             clearInterval(statusCheckInterval);
@@ -258,6 +302,9 @@
                             downloadBtn.disabled = false;
                             downloadBtn.textContent = '开始下载';
                             progressBar.classList.remove('show');
+                            metricsDiv.classList.remove('show');
+                            speedInfo.textContent = '';
+                            etaInfo.textContent = '';
                         }
                     }, 1000);
                 } else {
@@ -265,12 +312,18 @@
                     statusDiv.textContent = data.error || '下载失败';
                     downloadBtn.disabled = false;
                     downloadBtn.textContent = '开始下载';
+                    metricsDiv.classList.remove('show');
+                    speedInfo.textContent = '';
+                    etaInfo.textContent = '';
                 }
             } catch (error) {
                 statusDiv.className = 'status error show';
                 statusDiv.textContent = '网络错误: ' + error.message;
                 downloadBtn.disabled = false;
                 downloadBtn.textContent = '开始下载';
+                metricsDiv.classList.remove('show');
+                speedInfo.textContent = '';
+                etaInfo.textContent = '';
             }
         });
         

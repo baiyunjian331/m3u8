@@ -2,6 +2,7 @@ import os
 import re
 import requests
 import m3u8
+import time
 from Crypto.Cipher import AES
 from flask import Flask, render_template, request, jsonify
 from urllib.parse import urljoin, urlparse
@@ -17,6 +18,21 @@ if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
 download_status = {}
+
+
+def format_eta(seconds):
+    if seconds is None:
+        return None
+
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    if hours > 0:
+        return f"{hours:d}小时{minutes:02d}分{secs:02d}秒"
+    if minutes > 0:
+        return f"{minutes:d}分{secs:02d}秒"
+    return f"{secs:d}秒"
 
 def is_safe_url(url):
     try:
@@ -45,7 +61,15 @@ def is_safe_url(url):
 
 def download_m3u8(url, filename, task_id):
     try:
-        download_status[task_id] = {'status': 'downloading', 'progress': 0, 'message': '正在解析 M3U8 文件...'}
+        start_time = time.time()
+        downloaded_bytes = 0
+        download_status[task_id] = {
+            'status': 'downloading',
+            'progress': 0,
+            'message': '正在解析 M3U8 文件...',
+            'speed': None,
+            'eta': None
+        }
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -58,13 +82,25 @@ def download_m3u8(url, filename, task_id):
         
         if playlist.playlists:
             download_status[task_id] = {
-                'status': 'error', 
-                'message': '检测到多个视频流（variant playlist）。请从浏览器开发工具中找到具体的视频流 m3u8 链接，而不是主索引文件。'
+                'status': 'error',
+                'message': (
+                    '检测到多个视频流（variant playlist）。请从浏览器开发工具中找到具体的视频流 m3u8 链接，'
+                    '而不是主索引文件。'
+                ),
+                'progress': 0,
+                'speed': None,
+                'eta': None
             }
             return
-        
+
         if not playlist.segments:
-            download_status[task_id] = {'status': 'error', 'message': '未找到视频片段。请确认这是一个有效的 m3u8 视频文件链接。'}
+            download_status[task_id] = {
+                'status': 'error',
+                'message': '未找到视频片段。请确认这是一个有效的 m3u8 视频文件链接。',
+                'progress': 0,
+                'speed': None,
+                'eta': None
+            }
             return
         
         base_url = url.rsplit('/', 1)[0] + '/'
@@ -83,7 +119,10 @@ def download_m3u8(url, filename, task_id):
             if not is_safe_url(segment_url):
                 download_status[task_id] = {
                     'status': 'error',
-                    'message': f'片段 {i + 1} URL 指向内部网络资源，出于安全考虑已拒绝下载'
+                    'message': f'片段 {i + 1} URL 指向内部网络资源，出于安全考虑已拒绝下载',
+                    'progress': download_status[task_id].get('progress', 0),
+                    'speed': None,
+                    'eta': None
                 }
                 return
             
@@ -99,7 +138,10 @@ def download_m3u8(url, filename, task_id):
                     if method != 'AES-128':
                         download_status[task_id] = {
                             'status': 'error',
-                            'message': f'片段 {i + 1} 使用了不支持的加密方式: {method}'
+                            'message': f'片段 {i + 1} 使用了不支持的加密方式: {method}',
+                            'progress': download_status[task_id].get('progress', 0),
+                            'speed': None,
+                            'eta': None
                         }
                         return
 
@@ -109,7 +151,10 @@ def download_m3u8(url, filename, task_id):
                     if not is_safe_url(key_url):
                         download_status[task_id] = {
                             'status': 'error',
-                            'message': f'密钥 URL 指向内部网络资源，出于安全考虑已拒绝下载'
+                            'message': f'密钥 URL 指向内部网络资源，出于安全考虑已拒绝下载',
+                            'progress': download_status[task_id].get('progress', 0),
+                            'speed': None,
+                            'eta': None
                         }
                         return
 
@@ -123,7 +168,10 @@ def download_m3u8(url, filename, task_id):
                         except Exception as key_error:
                             download_status[task_id] = {
                                 'status': 'error',
-                                'message': f'片段 {i + 1} 密钥下载失败: {str(key_error)}'
+                                'message': f'片段 {i + 1} 密钥下载失败: {str(key_error)}',
+                                'progress': download_status[task_id].get('progress', 0),
+                                'speed': None,
+                                'eta': None
                             }
                             return
 
@@ -136,7 +184,10 @@ def download_m3u8(url, filename, task_id):
                         except ValueError as iv_error:
                             download_status[task_id] = {
                                 'status': 'error',
-                                'message': f'片段 {i + 1} IV 解析失败: {str(iv_error)}'
+                                'message': f'片段 {i + 1} IV 解析失败: {str(iv_error)}',
+                                'progress': download_status[task_id].get('progress', 0),
+                                'speed': None,
+                                'eta': None
                             }
                             return
                     else:
@@ -146,7 +197,10 @@ def download_m3u8(url, filename, task_id):
                     if len(iv_bytes) != 16:
                         download_status[task_id] = {
                             'status': 'error',
-                            'message': f'片段 {i + 1} IV 长度无效，无法解密'
+                            'message': f'片段 {i + 1} IV 长度无效，无法解密',
+                            'progress': download_status[task_id].get('progress', 0),
+                            'speed': None,
+                            'eta': None
                         }
                         return
 
@@ -156,28 +210,53 @@ def download_m3u8(url, filename, task_id):
                     except Exception as decrypt_error:
                         download_status[task_id] = {
                             'status': 'error',
-                            'message': f'片段 {i + 1} 解密失败: {str(decrypt_error)}'
+                            'message': f'片段 {i + 1} 解密失败: {str(decrypt_error)}',
+                            'progress': download_status[task_id].get('progress', 0),
+                            'speed': None,
+                            'eta': None
                         }
                         return
 
                 ts_files.append(segment_data)
+                downloaded_bytes += len(segment_data)
 
                 progress = int((i + 1) / total_segments * 100)
                 download_status[task_id]['progress'] = progress
+
+                elapsed = time.time() - start_time
+                speed_bytes_per_second = downloaded_bytes / elapsed if elapsed > 0 else 0
+                speed_mb_per_second = speed_bytes_per_second / (1024 * 1024) if speed_bytes_per_second else 0
+
+                average_segment_size = downloaded_bytes / (i + 1)
+                remaining_segments = total_segments - (i + 1)
+                remaining_bytes = average_segment_size * remaining_segments
+                eta_seconds = remaining_bytes / speed_bytes_per_second if speed_bytes_per_second else None
+
+                speed_text = f"{speed_mb_per_second:.2f} MB/s" if speed_bytes_per_second else None
+                eta_text = format_eta(eta_seconds)
+
+                download_status[task_id]['speed'] = speed_text
+                download_status[task_id]['eta'] = eta_text
                 download_status[task_id]['message'] = f'下载中... {i + 1}/{total_segments} ({progress}%)'
 
             except Exception as e:
                 failed_segments.append(i)
                 download_status[task_id] = {
                     'status': 'error',
-                    'message': f'片段 {i + 1} 下载失败: {str(e)}。已下载的片段: {i}/{total_segments}'
+                    'message': f'片段 {i + 1} 下载失败: {str(e)}。已下载的片段: {i}/{total_segments}',
+                    'progress': download_status[task_id].get('progress', 0),
+                    'speed': None,
+                    'eta': None
                 }
                 return
-        
+
         if failed_segments:
             download_status[task_id] = {
                 'status': 'error',
-                'message': f'下载失败。有 {len(failed_segments)} 个片段下载失败。'
+                'message': f'下载失败。有 {len(failed_segments)} 个片段下载失败。',
+                'progress': download_status[task_id].get('progress', 0),
+                'speed': None,
+                'eta': None
             }
             return
         
@@ -190,13 +269,18 @@ def download_m3u8(url, filename, task_id):
         download_status[task_id] = {
             'status': 'completed',
             'progress': 100,
-            'message': f'下载完成！文件已保存到: {output_path}'
+            'message': f'下载完成！文件已保存到: {output_path}',
+            'speed': None,
+            'eta': None
         }
-        
+
     except Exception as e:
         download_status[task_id] = {
             'status': 'error',
-            'message': f'下载失败: {str(e)}'
+            'message': f'下载失败: {str(e)}',
+            'progress': download_status.get(task_id, {}).get('progress', 0),
+            'speed': None,
+            'eta': None
         }
 
 @app.route('/')
@@ -239,7 +323,15 @@ def start_download():
 
 @app.route('/status/<task_id>')
 def get_status(task_id):
-    status = download_status.get(task_id, {'status': 'not_found', 'message': '任务不存在'})
+    status = download_status.get(task_id)
+    if status is None:
+        status = {
+            'status': 'not_found',
+            'message': '任务不存在',
+            'progress': 0,
+            'speed': None,
+            'eta': None
+        }
     return jsonify(status)
 
 @app.route('/files')
