@@ -152,5 +152,49 @@ class UtilityTests(unittest.TestCase):
             DownloadTaskOptions(url="https://example.com", title="demo", start_segment=5, end_segment=2).validate()
 
 
+class TaskControlEndpointTests(unittest.TestCase):
+    def test_start_task_endpoint_returns_payload(self):
+        task_payload = {"id": "abc"}
+        task_mock = mock.Mock()
+        task_mock.to_dict.return_value = task_payload
+        with mock.patch.object(app, "manager") as manager_mock:
+            manager_mock.start_task.return_value = task_mock
+            response = app.start_task("abc")
+        self.assertEqual(response, task_payload)
+        manager_mock.start_task.assert_called_once_with("abc")
+
+    def test_pause_task_endpoint_fetches_task_state(self):
+        task_payload = {"id": "abc", "status": "paused"}
+        task_mock = mock.Mock()
+        task_mock.to_dict.return_value = task_payload
+        with mock.patch.object(app, "manager") as manager_mock:
+            manager_mock.get_task.return_value = task_mock
+            response = app.pause_task("abc")
+        self.assertEqual(response, task_payload)
+        manager_mock.pause_task.assert_called_once_with("abc")
+        manager_mock.get_task.assert_called_once_with("abc")
+
+    def test_resume_task_endpoint(self):
+        task_payload = {"id": "abc", "status": "downloading"}
+        task_mock = mock.Mock()
+        task_mock.to_dict.return_value = task_payload
+        with mock.patch.object(app, "manager") as manager_mock:
+            manager_mock.resume_task.return_value = task_mock
+            response = app.resume_task("abc")
+        self.assertEqual(response, task_payload)
+        manager_mock.resume_task.assert_called_once_with("abc")
+
+    def test_delete_task_honours_remove_flag(self):
+        with mock.patch.object(app, "manager") as manager_mock:
+            request_obj = types.SimpleNamespace(
+                get_json=lambda **_: {"remove_files": True},
+                args={},
+            )
+            with mock.patch("app.request", request_obj):
+                response = app.delete_task("abc")
+        self.assertEqual(response, {"status": "ok"})
+        manager_mock.delete_task.assert_called_once_with("abc", remove_files=True)
+
+
 if __name__ == "__main__":
     unittest.main()

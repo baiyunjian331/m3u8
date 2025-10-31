@@ -98,7 +98,7 @@ class DownloadTask:
         self.created_at = time.time()
         self.started_at: Optional[float] = None
         self.completed_at: Optional[float] = None
-        self.status = "pending"
+        self.status = "ready"
         self.message: Optional[str] = None
         self.playlist_url: Optional[str] = None
 
@@ -106,6 +106,8 @@ class DownloadTask:
         self._thread: Optional[threading.Thread] = None
         self._force_event = threading.Event()
         self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._pause_event.set()
         self._current_key_uri: Optional[str] = None
         self._current_key_value: Optional[bytes] = None
         self._segments: List[SegmentStatus] = []
@@ -133,19 +135,66 @@ class DownloadTask:
         return cleaned[:80]
 
     def start(self) -> None:
+        resume = False
+        thread_to_start: Optional[threading.Thread] = None
         with self._lock:
-            if self._thread is not None:
-                return
-            self.options.validate()
-            self._thread = threading.Thread(target=self._run, name=f"task-{self.id}")
-            self._thread.daemon = True
-            self._thread.start()
+            if self._thread is not None and self._thread.is_alive():
+                if not self._pause_event.is_set():
+                    self._pause_event.set()
+                    resume = True
+            else:
+                if self.status in {"completed", "forced"}:
+                    return
+                self.options.validate()
+                self._stop_event.clear()
+                self._force_event.clear()
+                self._pause_event.set()
+                self._thread = threading.Thread(target=self._run, name=f"task-{self.id}")
+                self._thread.daemon = True
+                thread_to_start = self._thread
+        if thread_to_start:
+            thread_to_start.start()
+        if resume:
+            self._update_status("downloading", "Resuming download")
 
     def request_force_save(self) -> None:
         self._force_event.set()
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._pause_event.set()
+        thread = None
+        with self._lock:
+            thread = self._thread
+        if thread and thread.is_alive():
+            thread.join(timeout=1)
+
+    def pause(self) -> None:
+        with self._lock:
+            if not self._thread or not self._thread.is_alive():
+                return
+            self._pause_event.clear()
+        self._update_status("paused", "Download paused")
+
+    def resume(self) -> None:
+        self.start()
+
+    def cleanup(self, remove_outputs: bool = False) -> None:
+        if self.temp_path.exists():
+            try:
+                self.temp_path.unlink()
+            except OSError:
+                pass
+        if remove_outputs:
+            paths = {self.ts_path}
+            if self.output_path:
+                paths.add(self.output_path)
+            for path in paths:
+                if path.exists():
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
 
     def retry_segment(self, segment_index: int) -> None:
         with self._lock:
@@ -165,6 +214,12 @@ class DownloadTask:
             progress = completed / total if total else 0
             return {
                 "id": self.id,
+                "title": self.options.title,
+                "output_format": self.options.output_format,
+                "start_segment": self.options.start_segment,
+                "end_segment": self.options.end_segment,
+                "stream_to_disk": self.options.stream_to_disk,
+                "decrypt": self.options.decrypt,
                 "status": self.status,
                 "message": self.message,
                 "created_at": self.created_at,
@@ -204,6 +259,11 @@ class DownloadTask:
             self._update_status("error", str(exc))
         except Exception as exc:  # pragma: no cover - defensive
             self._update_status("error", f"Unexpected error: {exc}")
+        finally:
+            with self._lock:
+                if self._thread is threading.current_thread():
+                    self._thread = None
+                self._pause_event.set()
 
     def _update_status(self, status: str, message: Optional[str] = None) -> None:
         with self._lock:
@@ -280,6 +340,13 @@ class DownloadTask:
             if self._force_event.is_set():
                 self._update_status("forced", "Partial download saved")
                 break
+            if not self._pause_event.is_set():
+                if self.status != "paused":
+                    self._update_status("paused", "Download paused")
+                # Wait until resume or cancellation.
+                if not self._pause_event.wait(timeout=0.2):
+                    continue
+                self._update_status("downloading", "Downloading segments")
 
             segment = self._segments[self._cursor]
             try:
@@ -416,7 +483,6 @@ class DownloadManager:
         task = DownloadTask(task_id, options, self.output_dir)
         with self._lock:
             self._tasks[task_id] = task
-        task.start()
         return task
 
     def get_task(self, task_id: str) -> DownloadTask:
@@ -428,6 +494,27 @@ class DownloadManager:
     def list_tasks(self) -> List[DownloadTask]:
         with self._lock:
             return list(self._tasks.values())
+
+    def start_task(self, task_id: str) -> DownloadTask:
+        task = self.get_task(task_id)
+        task.start()
+        return task
+
+    def pause_task(self, task_id: str) -> None:
+        task = self.get_task(task_id)
+        task.pause()
+
+    def resume_task(self, task_id: str) -> DownloadTask:
+        task = self.get_task(task_id)
+        task.resume()
+        return task
+
+    def delete_task(self, task_id: str, remove_files: bool = False) -> None:
+        task = self.get_task(task_id)
+        task.stop()
+        task.cleanup(remove_outputs=remove_files)
+        with self._lock:
+            self._tasks.pop(task_id, None)
 
     def retry_segment(self, task_id: str, segment_index: int) -> None:
         task = self.get_task(task_id)

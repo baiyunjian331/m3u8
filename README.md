@@ -42,6 +42,19 @@
 
 下载结果默认保存在项目根目录的 `files/` 文件夹中。
 
+## API 接口
+
+若需自定义前端，可直接调用 Flask 提供的接口：
+
+- `POST /tasks`：创建任务，支持 `autostart`、`start_segment`、`end_segment`、`decrypt` 等参数。
+- `POST /tasks/<task_id>/start`：启动或继续任务，返回最新任务信息。
+- `POST /tasks/<task_id>/pause`：暂停任务并返回状态。
+- `POST /tasks/<task_id>/resume`：恢复任务。
+- `DELETE /tasks/<task_id>`：删除任务，可通过 `remove_files=true` 同时移除已下载文件。
+- `POST /tasks/<task_id>/retry`：指定 `segment_index` 重试某个分片。
+- `POST /tasks/<task_id>/force-save`：保存当前已下载的 TS 片段。
+- `GET /tasks`、`GET /tasks/<task_id>`：查看任务列表或详情。
+
 ## 许可
 
 本项目延续上游 MIT 许可，可自由修改和分发。

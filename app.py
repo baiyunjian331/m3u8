@@ -89,6 +89,13 @@ def create_task():
     stream_to_disk = bool(payload.get("stream_to_disk", True))
     decrypt = bool(payload.get("decrypt", True))
     headers = {**HEADERS, **(payload.get("headers") or {})}
+    autostart_raw = payload.get("autostart")
+    if autostart_raw is None:
+        autostart = True
+    elif isinstance(autostart_raw, str):
+        autostart = autostart_raw.strip().lower() not in {"0", "false", "no"}
+    else:
+        autostart = bool(autostart_raw)
 
     if not url:
         return jsonify({"error": "请输入有效的 M3U8 地址"}), 400
@@ -112,6 +119,8 @@ def create_task():
 
     task_id = str(uuid.uuid4())
     manager.create_task(task_id, options)
+    if autostart:
+        manager.start_task(task_id)
     return jsonify({"task_id": task_id})
 
 
@@ -148,6 +157,49 @@ def retry_segment(task_id: str):
 def force_save(task_id: str):
     try:
         manager.force_save(task_id)
+    except KeyError:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify({"status": "ok"})
+
+
+@app.route("/tasks/<task_id>/start", methods=["POST"])
+def start_task(task_id: str):
+    try:
+        task = manager.start_task(task_id)
+    except KeyError:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify(task.to_dict())
+
+
+@app.route("/tasks/<task_id>/pause", methods=["POST"])
+def pause_task(task_id: str):
+    try:
+        manager.pause_task(task_id)
+        task = manager.get_task(task_id)
+    except KeyError:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify(task.to_dict())
+
+
+@app.route("/tasks/<task_id>/resume", methods=["POST"])
+def resume_task(task_id: str):
+    try:
+        task = manager.resume_task(task_id)
+    except KeyError:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify(task.to_dict())
+
+
+@app.route("/tasks/<task_id>", methods=["DELETE"])
+def delete_task(task_id: str):
+    payload = request.get_json(force=True, silent=True) or {}
+    remove_flag = payload.get("remove_files")
+    if remove_flag is None:
+        args = getattr(request, "args", {}) or {}
+        remove_flag = args.get("remove_files")
+    remove_files = str(remove_flag).lower() in {"1", "true", "yes"}
+    try:
+        manager.delete_task(task_id, remove_files=remove_files)
     except KeyError:
         return jsonify({"error": "任务不存在"}), 404
     return jsonify({"status": "ok"})
