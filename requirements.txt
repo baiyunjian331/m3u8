@@ -1,0 +1,4 @@
+Flask
+requests
+m3u8
+pycryptodome

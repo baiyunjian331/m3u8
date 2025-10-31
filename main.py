@@ -1,43 +1,103 @@
-import os
-import PySimpleGUI as sg
-import requests
-import threading
+"""Simple interactive console interface leveraging the download manager."""
+from __future__ import annotations
 
-FFMPEG_PATH = "G:/ffmpeg-7.1.1-full_build/bin/ffmpeg.exe"  # 用户提供路径
+import sys
+import time
+import uuid
+from pathlib import Path
 
-def download_m3u8(m3u8_url, output_path):
-    if not m3u8_url.strip():
-        sg.popup_error("请输入 M3U8 链接")
-        return
-    if not output_path.strip():
-        sg.popup_error("请选择保存位置")
-        return
+from downloader import DownloadManager, DownloadTaskOptions
 
-    sg.popup("开始下载... 请稍等")
-    # 调用 FFmpeg 下载命令
-    cmd = f'"{FFMPEG_PATH}" -headers "User-Agent: ExoPlayer" -i "{m3u8_url}" -c copy -bsf:a aac_adtstoasc "{output_path}"'
-    os.system(cmd)
-    sg.popup("下载完成！")
 
-def main():
-    sg.theme("DarkBlue")
-    layout = [
-        [sg.Text("M3U8链接", size=(10, 1)), sg.InputText(key="-URL-")],
-        [sg.Text("保存为", size=(10, 1)), sg.InputText(key="-OUT-"), sg.FileSaveAs(file_types=(("MP4 Video", "*.mp4"),))],
-        [sg.Button("开始下载"), sg.Button("退出")]
-    ]
-    window = sg.Window("M3U8 视频下载器", layout)
+def prompt(question: str, default: str | None = None) -> str:
+    suffix = f" [{default}]" if default else ""
+    value = input(f"{question}{suffix}: ")
+    return value.strip() or (default or "")
 
-    while True:
-        event, values = window.read()
-        if event == sg.WIN_CLOSED or event == "退出":
-            break
-        elif event == "开始下载":
-            m3u8_url = values["-URL-"]
-            output_path = values["-OUT-"]
-            threading.Thread(target=download_m3u8, args=(m3u8_url, output_path), daemon=True).start()
 
-    window.close()
+def interactive() -> int:
+    print("=== get-m3u8 桌面下载器 ===")
+    url = prompt("请输入 M3U8 链接")
+    if not url:
+        print("必须提供 M3U8 链接")
+        return 1
+    title = prompt("保存标题", "video")
+    output_format = prompt("保存格式 (ts/mp4)", "ts").lower()
+    start_segment = prompt("起始片段 (可选)", "")
+    end_segment = prompt("结束片段 (可选)", "")
+    stream_choice = prompt("边下边存? (y/n)", "y").lower() != "n"
+    decrypt_choice = prompt("开启 AES 解密? (y/n)", "y").lower() != "n"
+    output_dir = Path(prompt("保存目录", "files"))
 
-if __name__ == '__main__':
-    main()
+    options = DownloadTaskOptions(
+        url=url,
+        title=title,
+        output_format=output_format,
+        start_segment=int(start_segment) if start_segment else None,
+        end_segment=int(end_segment) if end_segment else None,
+        stream_to_disk=stream_choice,
+        decrypt=decrypt_choice,
+    )
+
+    manager = DownloadManager(output_dir)
+    task_id = str(uuid.uuid4())
+    task = manager.create_task(task_id, options)
+
+    print("开始下载，按 Ctrl+C 强制保存当前进度。")
+    spinner = "|/-\\"
+    idx = 0
+    try:
+        while True:
+            status = task.to_dict()
+            state = status["status"]
+            progress = status.get("progress", 0) * 100
+            speed = status.get("speed_bps") or 0
+            eta = status.get("eta_seconds")
+            message = status.get("message") or ""
+            eta_text = format_eta(eta) if eta else "—"
+            speed_text = format_speed(speed)
+            sys.stdout.write(
+                f"\r{spinner[idx % len(spinner)]} 状态:{state:<10} 进度:{progress:6.2f}% 速度:{speed_text:<10} ETA:{eta_text:<8} {message:<40}"
+            )
+            sys.stdout.flush()
+            if state in {"completed", "error", "forced", "stopped"}:
+                break
+            idx += 1
+            time.sleep(1)
+    except KeyboardInterrupt:
+        task.request_force_save()
+        print("\n收到中断，正在尝试保存已下载片段...")
+    finally:
+        print("\n")
+    final_status = task.to_dict()
+    print(f"结果: {final_status['status']} - {final_status.get('message', '')}")
+    if final_status.get("output_path"):
+        print(f"文件位置: {final_status['output_path']}")
+    if final_status.get("ffmpeg_missing"):
+        print("提示: 未检测到 ffmpeg，已保存为 TS。")
+    return 0 if final_status["status"] == "completed" else 1
+
+
+def format_eta(seconds: float) -> str:
+    seconds = int(seconds)
+    mins, secs = divmod(seconds, 60)
+    hours, mins = divmod(mins, 60)
+    if hours:
+        return f"{hours}h{mins:02d}m"
+    if mins:
+        return f"{mins}m{secs:02d}s"
+    return f"{secs}s"
+
+
+def format_speed(speed: float) -> str:
+    if speed <= 0:
+        return "—"
+    if speed > 1024 * 1024:
+        return f"{speed / 1024 / 1024:.2f} MB/s"
+    if speed > 1024:
+        return f"{speed / 1024:.2f} KB/s"
+    return f"{speed:.0f} B/s"
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(interactive())

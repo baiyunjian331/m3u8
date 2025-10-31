@@ -1,408 +1,437 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>M3U8 视频下载器 - 服务器版</title>
+  <head>
+    <meta charset="utf-8" />
+    <title>get-m3u8 下载面板</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+      :root {
+        color-scheme: light dark;
+        font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        --bg: #f5f7fb;
+        --card: #ffffff;
+        --border: #d9dfe8;
+        --accent: #1677ff;
+        --accent-light: #e6f4ff;
+        --text: #1f1f1f;
+        --muted: #64748b;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+      }
+      header {
+        padding: 32px 24px 16px;
+        text-align: center;
+      }
+      header h1 {
+        margin: 0 0 12px;
+        font-size: 32px;
+      }
+      header p {
+        margin: 0;
+        color: var(--muted);
+      }
+      main {
+        padding: 0 24px 48px;
+        max-width: 1200px;
+        margin: 0 auto;
+        display: grid;
+        gap: 24px;
+      }
+      .card {
+        background: var(--card);
+        border-radius: 16px;
+        box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+        border: 1px solid var(--border);
+        padding: 24px;
+      }
+      .form-grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      }
+      label {
+        font-weight: 600;
+        display: block;
+        margin-bottom: 6px;
+      }
+      input[type="text"],
+      input[type="number"],
+      select {
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        padding: 10px 12px;
+        font-size: 15px;
+      }
+      input[type="checkbox"] {
+        margin-right: 8px;
+      }
+      .full-row {
+        grid-column: 1 / -1;
+      }
+      button {
+        background: var(--accent);
+        color: white;
+        border-radius: 10px;
+        padding: 12px 20px;
+        font-size: 15px;
+        font-weight: 600;
+        border: none;
+        cursor: pointer;
+        transition: transform 0.1s ease, box-shadow 0.1s ease;
+      }
+      button.secondary {
+        background: transparent;
+        color: var(--accent);
+        border: 1px solid var(--accent);
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      button:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: 0 12px 20px rgba(22, 119, 255, 0.2);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        text-align: left;
+        padding: 12px 10px;
+        border-bottom: 1px solid var(--border);
+      }
+      th {
+        font-size: 13px;
+        text-transform: uppercase;
+        color: var(--muted);
+        letter-spacing: 0.04em;
+      }
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .tag.success {
+        background: #ecfdf3;
+        color: #027a48;
+      }
+      .tag.warning {
+        background: #fef3c7;
+        color: #92400e;
+      }
+      .tag.danger {
+        background: #fee2e2;
+        color: #b91c1c;
+      }
+      .tag.neutral {
+        background: #e2e8f0;
+        color: #1e293b;
+      }
+      progress {
+        width: 180px;
+        height: 8px;
+        border-radius: 999px;
+        overflow: hidden;
+      }
+      .segments {
+        margin-top: 16px;
+        border-top: 1px solid var(--border);
+        padding-top: 16px;
+      }
+      .segments ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 8px;
+      }
+      .segments li {
+        background: var(--accent-light);
+        border-radius: 12px;
+        padding: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .segments span {
+        font-size: 13px;
+      }
+      .segments button {
+        padding: 6px 12px;
+        font-size: 13px;
+      }
+      .message {
+        margin-top: 12px;
+        color: #d97706;
+      }
+      @media (max-width: 768px) {
+        header h1 {
+          font-size: 24px;
         }
-        
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
+        progress {
+          width: 120px;
         }
-        
-        .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            padding: 40px;
-            max-width: 600px;
-            width: 100%;
-        }
-        
-        h1 {
-            color: #667eea;
-            margin-bottom: 10px;
-            text-align: center;
-            font-size: 28px;
-        }
-        
-        .subtitle {
-            text-align: center;
-            color: #666;
-            margin-bottom: 30px;
-            font-size: 14px;
-        }
-        
-        .form-group {
-            margin-bottom: 20px;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 8px;
-            color: #333;
-            font-weight: 500;
-        }
-        
-        input[type="text"] {
-            width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
-            font-size: 14px;
-            transition: border-color 0.3s;
-        }
-        
-        input[type="text"]:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        
-        button {
-            width: 100%;
-            padding: 14px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
-        }
-        
-        button:active {
-            transform: translateY(0);
-        }
-        
-        button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
-        .status {
-            margin-top: 20px;
-            padding: 15px;
-            border-radius: 10px;
-            display: none;
-        }
-        
-        .status.show {
-            display: block;
-        }
-        
-        .status.info {
-            background: #e3f2fd;
-            color: #1976d2;
-            border-left: 4px solid #1976d2;
-        }
-        
-        .status.success {
-            background: #e8f5e9;
-            color: #388e3c;
-            border-left: 4px solid #388e3c;
-        }
-        
-        .status.error {
-            background: #ffebee;
-            color: #d32f2f;
-            border-left: 4px solid #d32f2f;
-        }
-
-        .metrics {
-            margin-top: 10px;
-            padding: 10px 15px;
-            background: rgba(102, 126, 234, 0.1);
-            border-radius: 8px;
-            color: #444;
-            display: none;
-            justify-content: space-between;
-            gap: 12px;
-            font-size: 14px;
-        }
-
-        .metrics.show {
-            display: flex;
-        }
-
-        .metrics span {
-            flex: 1;
-        }
-        
-        .progress-bar {
-            width: 100%;
-            height: 8px;
-            background: #e0e0e0;
-            border-radius: 4px;
-            margin-top: 10px;
-            overflow: hidden;
-            display: none;
-        }
-        
-        .progress-bar.show {
-            display: block;
-        }
-        
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-            transition: width 0.3s;
-            width: 0%;
-        }
-        
-        .files-list {
-            margin-top: 30px;
-            padding-top: 30px;
-            border-top: 2px solid #e0e0e0;
-        }
-        
-        .files-list h3 {
-            color: #333;
-            margin-bottom: 15px;
-            font-size: 18px;
-        }
-        
-        .file-item {
-            padding: 10px 14px;
-            background: #f5f5f5;
-            border-radius: 8px;
-            margin-bottom: 8px;
-            color: #333;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-        }
-
-        .file-item.highlight {
-            border: 2px solid #667eea;
-            background: #eef2ff;
-        }
-
-        .download-link {
-            padding: 6px 12px;
-            border-radius: 6px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: #fff;
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 600;
-            transition: transform 0.2s, box-shadow 0.2s;
-            white-space: nowrap;
-        }
-
-        .download-link:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 6px 16px rgba(102, 126, 234, 0.35);
-        }
-
-        .download-action {
-            margin-top: 15px;
-            display: none;
-        }
-
-        .download-action.show {
-            display: flex;
-            justify-content: flex-end;
-        }
+      }
     </style>
-</head>
-<body>
-    <div class="container">
-        <h1>📹 M3U8 视频下载器</h1>
-        <p class="subtitle">视频将保存到服务器的 files 文件夹中</p>
-        
-        <form id="downloadForm">
-            <div class="form-group">
-                <label for="m3u8Url">M3U8 链接</label>
-                <input type="text" id="m3u8Url" placeholder="请输入 M3U8 视频链接" required>
+  </head>
+  <body>
+    <header>
+      <h1>get-m3u8 下载面板</h1>
+      <p>仿照 get-m3u8 的多功能下载体验：范围下载、边下边存、强制保存以及自动重试。</p>
+    </header>
+    <main>
+      <section class="card">
+        <h2>新建下载任务</h2>
+        <form id="task-form">
+          <div class="form-grid">
+            <div class="full-row">
+              <label for="url">M3U8 地址</label>
+              <input type="text" id="url" name="url" placeholder="https://example.com/video.m3u8" required />
             </div>
-            
-            <div class="form-group">
-                <label for="filename">文件名</label>
-                <input type="text" id="filename" placeholder="video.mp4" value="video.mp4">
+            <div>
+              <label for="title">保存标题</label>
+              <input type="text" id="title" name="title" placeholder="自动从链接推断" />
             </div>
-            
-            <button type="submit" id="downloadBtn">开始下载</button>
+            <div>
+              <label for="format">保存格式</label>
+              <select id="format" name="output_format">
+                <option value="ts">TS</option>
+                <option value="mp4">MP4</option>
+              </select>
+            </div>
+            <div>
+              <label for="start">起始片段</label>
+              <input type="number" id="start" name="start_segment" min="1" placeholder="留空表示默认" />
+            </div>
+            <div>
+              <label for="end">结束片段</label>
+              <input type="number" id="end" name="end_segment" min="1" placeholder="留空表示默认" />
+            </div>
+            <div>
+              <label>下载模式</label>
+              <div>
+                <label><input type="checkbox" id="stream" checked /> 边下边存</label>
+              </div>
+            </div>
+            <div>
+              <label>解密</label>
+              <div>
+                <label><input type="checkbox" id="decrypt" checked /> AES-128 解密</label>
+              </div>
+            </div>
+            <div class="full-row">
+              <button type="submit">创建下载任务</button>
+            </div>
+          </div>
         </form>
-        
-        <div id="status" class="status"></div>
-        <div id="downloadAction" class="download-action"></div>
-        <div id="progressBar" class="progress-bar">
-            <div id="progressFill" class="progress-fill"></div>
+        <p id="form-message" class="message" hidden></p>
+      </section>
+
+      <section class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h2 style="margin: 0;">任务列表</h2>
+          <button class="secondary" id="refresh">刷新状态</button>
         </div>
-        <div id="metrics" class="metrics">
-            <span id="speedInfo"></span>
-            <span id="etaInfo" style="text-align: right;"></span>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>标题</th>
+                <th>状态</th>
+                <th>进度</th>
+                <th>速度</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="task-body">
+              <tr>
+                <td colspan="5" style="text-align:center; color: var(--muted); padding: 24px;">暂无任务</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        
-        <div class="files-list">
-            <h3>已下载的文件</h3>
-            <div id="filesList"></div>
+        <div id="segments" class="segments" hidden>
+          <h3>片段详情</h3>
+          <ul id="segment-list"></ul>
         </div>
-    </div>
-    
+      </section>
+    </main>
+
     <script>
-        let statusCheckInterval;
-        
-        document.getElementById('downloadForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const url = document.getElementById('m3u8Url').value;
-            const filename = document.getElementById('filename').value;
-            const downloadBtn = document.getElementById('downloadBtn');
-            const statusDiv = document.getElementById('status');
-            const progressBar = document.getElementById('progressBar');
-            const progressFill = document.getElementById('progressFill');
-            const metricsDiv = document.getElementById('metrics');
-            const speedInfo = document.getElementById('speedInfo');
-            const etaInfo = document.getElementById('etaInfo');
-            const downloadAction = document.getElementById('downloadAction');
+      const taskBody = document.getElementById('task-body');
+      const form = document.getElementById('task-form');
+      const messageEl = document.getElementById('form-message');
+      const segmentPanel = document.getElementById('segments');
+      const segmentList = document.getElementById('segment-list');
+      let selectedTaskId = null;
+      let pollTimer = null;
 
-            downloadBtn.disabled = true;
-            downloadBtn.textContent = '下载中...';
-            progressFill.style.width = '0%';
-            metricsDiv.classList.remove('show');
-            speedInfo.textContent = '';
-            etaInfo.textContent = '';
-            downloadAction.classList.remove('show');
-            downloadAction.innerHTML = '';
+      function showMessage(text, isError = false) {
+        messageEl.textContent = text;
+        messageEl.style.color = isError ? '#b91c1c' : '#1677ff';
+        messageEl.hidden = !text;
+      }
 
-            try {
-                const response = await fetch('/download', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ url, filename })
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    const taskId = data.task_id;
-                    
-                    statusDiv.className = 'status info show';
-                    statusDiv.textContent = data.message;
-                    progressBar.classList.add('show');
-                    
-                    if (statusCheckInterval) {
-                        clearInterval(statusCheckInterval);
-                    }
-                    
-                    statusCheckInterval = setInterval(async () => {
-                        const statusResponse = await fetch(`/status/${taskId}`);
-                        const statusData = await statusResponse.json();
+      function formatStatus(status) {
+        const map = {
+          preparing: ['准备中', 'neutral'],
+          downloading: ['下载中', 'warning'],
+          completed: ['已完成', 'success'],
+          forced: ['已强制保存', 'warning'],
+          error: ['失败', 'danger'],
+          stopped: ['已取消', 'danger'],
+        };
+        return map[status] || [status, 'neutral'];
+      }
 
-                        statusDiv.textContent = statusData.message;
-
-                        if (typeof statusData.progress === 'number') {
-                            progressFill.style.width = statusData.progress + '%';
-                        }
-
-                        if (statusData.status === 'downloading') {
-                            metricsDiv.classList.add('show');
-                            speedInfo.textContent = '速度：' + (statusData.speed || '计算中...');
-                            etaInfo.textContent = '剩余时间：' + (statusData.eta || '计算中...');
-                        } else {
-                            metricsDiv.classList.remove('show');
-                            speedInfo.textContent = '';
-                            etaInfo.textContent = '';
-                        }
-
-                        if (statusData.status === 'completed') {
-                            clearInterval(statusCheckInterval);
-                            statusDiv.className = 'status success show';
-                            downloadBtn.disabled = false;
-                            downloadBtn.textContent = '开始下载';
-                            metricsDiv.classList.remove('show');
-                            speedInfo.textContent = '';
-                            etaInfo.textContent = '';
-                            if (statusData.download_url) {
-                                downloadAction.innerHTML = `<a class="download-link" href="${statusData.download_url}" download>⬇️ 下载文件</a>`;
-                                downloadAction.classList.add('show');
-                            }
-                            loadFiles(statusData.download_url || null);
-                        } else if (statusData.status === 'error') {
-                            clearInterval(statusCheckInterval);
-                            statusDiv.className = 'status error show';
-                            downloadBtn.disabled = false;
-                            downloadBtn.textContent = '开始下载';
-                            progressBar.classList.remove('show');
-                            metricsDiv.classList.remove('show');
-                            speedInfo.textContent = '';
-                            etaInfo.textContent = '';
-                            downloadAction.classList.remove('show');
-                            downloadAction.innerHTML = '';
-                        }
-                    }, 1000);
-                } else {
-                    statusDiv.className = 'status error show';
-                    statusDiv.textContent = data.error || '下载失败';
-                    downloadBtn.disabled = false;
-                    downloadBtn.textContent = '开始下载';
-                    metricsDiv.classList.remove('show');
-                    speedInfo.textContent = '';
-                    etaInfo.textContent = '';
-                    downloadAction.classList.remove('show');
-                    downloadAction.innerHTML = '';
-                }
-            } catch (error) {
-                statusDiv.className = 'status error show';
-                statusDiv.textContent = '网络错误: ' + error.message;
-                downloadBtn.disabled = false;
-                downloadBtn.textContent = '开始下载';
-                metricsDiv.classList.remove('show');
-                speedInfo.textContent = '';
-                etaInfo.textContent = '';
-                downloadAction.classList.remove('show');
-                downloadAction.innerHTML = '';
-            }
-        });
-
-        async function loadFiles(highlightUrl = null) {
-            try {
-                const response = await fetch('/files');
-                const data = await response.json();
-                const filesList = document.getElementById('filesList');
-
-                if (!Array.isArray(data.files) || data.files.length === 0) {
-                    filesList.innerHTML = '<p style="color: #999;">暂无文件</p>';
-                } else {
-                    filesList.innerHTML = data.files.map(file => {
-                        const isHighlight = highlightUrl && file.url === highlightUrl;
-                        const highlightClass = isHighlight ? 'file-item highlight' : 'file-item';
-                        return `
-                            <div class="${highlightClass}">
-                                <span>📁 ${file.name}</span>
-                                <a class="download-link" href="${file.url}" download>下载</a>
-                            </div>
-                        `;
-                    }).join('');
-                }
-            } catch (error) {
-                console.error('加载文件列表失败:', error);
-            }
+      function formatSpeed(speed) {
+        if (!speed) return '—';
+        if (speed > 1024 * 1024) {
+          return (speed / 1024 / 1024).toFixed(2) + ' MB/s';
         }
-        
-        loadFiles();
+        if (speed > 1024) {
+          return (speed / 1024).toFixed(2) + ' KB/s';
+        }
+        return speed.toFixed(0) + ' B/s';
+      }
+
+      function renderTasks(tasks) {
+        taskBody.innerHTML = '';
+        if (!tasks.length) {
+          taskBody.innerHTML = '<tr><td colspan="5" style="text-align:center; color: var(--muted); padding: 24px;">暂无任务</td></tr>';
+          return;
+        }
+        for (const task of tasks) {
+          const row = document.createElement('tr');
+          const [label, tone] = formatStatus(task.status);
+          const percent = Math.round((task.progress || 0) * 100);
+          row.innerHTML = `
+            <td>${task.output_path ? task.output_path.split('/').pop() : task.id}</td>
+            <td><span class="tag ${tone}">${label}</span><div style="font-size:12px; color:var(--muted);">${task.message || ''}</div></td>
+            <td><progress value="${percent}" max="100"></progress> ${percent}%</td>
+            <td>${formatSpeed(task.speed_bps)}</td>
+            <td>
+              <button class="secondary" data-action="view" data-id="${task.id}">片段</button>
+              <button class="secondary" data-action="force" data-id="${task.id}">强制保存</button>
+              ${task.output_path && task.status === 'completed' ? `<a href="/files/${encodeURIComponent(task.output_path.split('/').pop())}" style="margin-left:8px;">下载</a>` : ''}
+            </td>
+          `;
+          taskBody.appendChild(row);
+        }
+      }
+
+      async function fetchTasks(showSegments = false) {
+        const res = await fetch('/tasks');
+        if (!res.ok) return;
+        const data = await res.json();
+        renderTasks(data.tasks || []);
+        if (showSegments && selectedTaskId) {
+          const task = data.tasks.find(t => t.id === selectedTaskId);
+          if (task) renderSegments(task.segments || []);
+        }
+      }
+
+      function renderSegments(segments) {
+        if (!segments.length) {
+          segmentPanel.hidden = true;
+          return;
+        }
+        segmentPanel.hidden = false;
+        segmentList.innerHTML = '';
+        for (const seg of segments) {
+          const item = document.createElement('li');
+          const size = seg.size ? (seg.size / 1024).toFixed(1) + ' KB' : '—';
+          item.innerHTML = `
+            <span>#${seg.index + 1} · ${seg.status}${seg.error ? ' · ' + seg.error : ''} · ${size}</span>
+            <button data-segment="${seg.index}" data-action="retry">重试</button>
+          `;
+          item.querySelector('button').disabled = seg.status === 'pending' || seg.status === 'downloading';
+          segmentList.appendChild(item);
+        }
+      }
+
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        showMessage('正在创建任务...');
+        const payload = {
+          url: form.url.value,
+          title: form.title.value,
+          output_format: form.format.value,
+          start_segment: form.start.value || null,
+          end_segment: form.end.value || null,
+          stream_to_disk: document.getElementById('stream').checked,
+          decrypt: document.getElementById('decrypt').checked,
+        };
+        try {
+          const res = await fetch('/tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            showMessage(data.error || '创建失败', true);
+            return;
+          }
+          showMessage('任务创建成功，任务编号：' + data.task_id);
+          form.reset();
+          document.getElementById('stream').checked = true;
+          document.getElementById('decrypt').checked = true;
+          fetchTasks();
+        } catch (err) {
+          showMessage('网络错误：' + err.message, true);
+        }
+      });
+
+      document.getElementById('refresh').addEventListener('click', () => {
+        fetchTasks(true);
+      });
+
+      taskBody.addEventListener('click', async event => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        const action = button.dataset.action;
+        const id = button.dataset.id;
+        if (action === 'view') {
+          selectedTaskId = id;
+          const res = await fetch(`/tasks/${id}`);
+          if (!res.ok) return;
+          const task = await res.json();
+          renderSegments(task.segments || []);
+        } else if (action === 'force') {
+          await fetch(`/tasks/${id}/force-save`, { method: 'POST' });
+          fetchTasks(true);
+        }
+      });
+
+      segmentList.addEventListener('click', async event => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        const segment = button.dataset.segment;
+        if (segment === undefined) return;
+        button.disabled = true;
+        await fetch(`/tasks/${selectedTaskId}/retry`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ segment_index: Number(segment) }),
+        });
+        fetchTasks(true);
+      });
+
+      async function poll() {
+        await fetchTasks(true);
+        pollTimer = setTimeout(poll, 4000);
+      }
+      poll();
     </script>
-</body>
+  </body>
 </html>

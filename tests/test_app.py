@@ -3,8 +3,8 @@ import socket
 import sys
 import types
 import unittest
-from unittest import mock
 import uuid
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -17,14 +17,38 @@ def _install_stub_module(name, **attributes):
     return module
 
 
-# Stub third-party dependencies imported by app.py so tests can run without them.
-_install_stub_module("requests", get=None)
-_install_stub_module("m3u8", loads=None)
+class _StubResponse:
+    def __init__(self):
+        self.status_code = 200
+        self.text = ""
+        self.content = b""
+        self.url = "https://example.com/playlist.m3u8"
+
+    def raise_for_status(self):
+        pass
+
+
+def _fake_requests_get(*args, **kwargs):
+    raise RuntimeError("network calls are disabled in tests")
+
+
+_install_stub_module("requests", get=_fake_requests_get)
+_install_stub_module("m3u8", loads=lambda data: None)
 
 crypto_module = _install_stub_module("Crypto")
 cipher_module = _install_stub_module("Crypto.Cipher")
-aes_module = _install_stub_module("Crypto.Cipher.AES")
-setattr(cipher_module, "AES", aes_module)
+
+
+class _StubCipher:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def decrypt(self, data):
+        return data
+
+
+_install_stub_module("Crypto.Cipher.AES", new=lambda *a, **k: _StubCipher())
+setattr(cipher_module, "AES", sys.modules["Crypto.Cipher.AES"])
 setattr(crypto_module, "Cipher", cipher_module)
 
 class _StubFlask:
@@ -41,29 +65,17 @@ class _StubFlask:
 _install_stub_module(
     "flask",
     Flask=_StubFlask,
-    render_template=lambda *args, **kwargs: None,
+    jsonify=lambda payload: payload,
+    render_template=lambda *a, **k: None,
     request=None,
-    jsonify=lambda *args, **kwargs: None,
-    send_from_directory=lambda *args, **kwargs: None,
-    abort=lambda *args, **kwargs: None,
+    send_from_directory=lambda *a, **k: None,
 )
 
-werkzeug_module = _install_stub_module("werkzeug")
-werkzeug_utils_module = _install_stub_module(
-    "werkzeug.utils", secure_filename=lambda filename: filename
-)
-setattr(werkzeug_module, "utils", werkzeug_utils_module)
+_install_stub_module("werkzeug.utils", secure_filename=lambda filename: filename)
 
+from downloader import DownloadTaskOptions
 import app
-from app import is_safe_url
-
-
-class _DummyThread:
-    def __init__(self, *args, **kwargs):
-        self.daemon = False
-
-    def start(self):
-        pass
+from app import derive_title_from_url, is_safe_url
 
 
 class IsSafeUrlTests(unittest.TestCase):
@@ -86,33 +98,58 @@ class IsSafeUrlTests(unittest.TestCase):
             self.assertFalse(is_safe_url(url))
 
 
-class StartDownloadTests(unittest.TestCase):
+class CreateTaskTests(unittest.TestCase):
     def test_repeated_submissions_generate_unique_uuid_task_ids(self):
         fake_uuid_values = [
             uuid.UUID("12345678-1234-5678-1234-567812345678"),
             uuid.UUID("87654321-4321-8765-4321-876543218765"),
         ]
 
-        request_payload = {
+        payload = {
             "url": "https://example.com/video.m3u8",
-            "filename": "video.mp4",
+            "title": "Demo",
+            "output_format": "mp4",
         }
 
-        with mock.patch("app.jsonify", side_effect=lambda payload: payload):
-            with mock.patch("app.threading.Thread", side_effect=lambda *a, **k: _DummyThread()):
-                with mock.patch("app.uuid.uuid4", side_effect=fake_uuid_values):
-                    task_ids = []
-                    for _ in range(2):
-                        with mock.patch("app.request", types.SimpleNamespace(json=request_payload.copy())):
-                            response = app.start_download()
-                        task_ids.append(response["task_id"])
+        with mock.patch.object(app, "manager") as manager_mock:
+            manager_mock.create_task.return_value = mock.Mock()
+            with mock.patch("app.uuid.uuid4", side_effect=fake_uuid_values):
+                responses = []
+                for _ in range(2):
+                    with mock.patch("app.request", types.SimpleNamespace(get_json=lambda **k: payload)):
+                        response = app.create_task()
+                    responses.append(response)
 
-        self.assertEqual(len(task_ids), 2)
-        self.assertNotEqual(task_ids[0], task_ids[1])
-        for task_id in task_ids:
-            self.assertIsInstance(task_id, str)
-            # Ensure the returned identifier is a valid UUID string
-            self.assertEqual(task_id, str(uuid.UUID(task_id)))
+        self.assertEqual(len(responses), 2)
+        self.assertNotEqual(responses[0]["task_id"], responses[1]["task_id"])
+        first_call = manager_mock.create_task.call_args_list[0]
+        second_call = manager_mock.create_task.call_args_list[1]
+        self.assertEqual(str(fake_uuid_values[0]), first_call.args[0])
+        self.assertEqual(str(fake_uuid_values[1]), second_call.args[0])
+        options = first_call.args[1]
+        self.assertIsInstance(options, DownloadTaskOptions)
+        self.assertEqual(options.url, payload["url"])
+        self.assertEqual(options.output_format, payload["output_format"])
+
+    def test_missing_url_returns_error(self):
+        with mock.patch("app.request", types.SimpleNamespace(get_json=lambda **k: {"url": ""})):
+            response, status = app.create_task()
+        self.assertEqual(status, 400)
+        self.assertIn("error", response)
+
+
+class UtilityTests(unittest.TestCase):
+    def test_title_fallback(self):
+        self.assertEqual(derive_title_from_url("https://example.com/video/index.m3u8"), "index")
+        self.assertEqual(derive_title_from_url("https://example.com/"), "video")
+
+    def test_download_task_options_validation(self):
+        options = DownloadTaskOptions(url="https://example.com/file.m3u8", title="demo")
+        options.validate()
+        with self.assertRaises(ValueError):
+            DownloadTaskOptions(url="https://example.com", title="demo", output_format="avi").validate()
+        with self.assertRaises(ValueError):
+            DownloadTaskOptions(url="https://example.com", title="demo", start_segment=5, end_segment=2).validate()
 
 
 if __name__ == "__main__":
